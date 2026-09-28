@@ -1,0 +1,41 @@
+# Local projects, captions, preview cache and server state
+/data/
+/.local/
+
+# Exported posts (also when a media library is nested in the repository)
+Посты для Telegram/
+
+# Personal photos and videos; keep code-native assets such as SVG tracked
+*.[jJ][pP][gG]
+*.[jJ][pP][eE][gG]
+*.[hH][eE][iI][cC]
+*.[hH][eE][iI][fF]
+*.[pP][nN][gG]
+*.[tT][iI][fF]
+*.[tT][iI][fF][fF]
+*.[wW][eE][bB][pP]
+*.[mM][oO][vV]
+*.[mM][pP]4
+*.[mM]4[vV]
+*.[wW][eE][bB][mM]
+
+# Synthetic fixtures are intentionally versioned
+!/tests/fixtures/*.png
+!/tests/fixtures/*.jpg
+!/tests/fixtures/*.heic
+!/tests/fixtures/*.mov
+
+# Python bytecode, environments and test caches
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS Finder metadata and resource forks
+.DS_Store
+._*
+.Spotlight-V100/
+.Trashes/
