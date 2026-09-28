@@ -1,4 +1,5 @@
 import json
+from http.server import BaseHTTPRequestHandler
 import os
 from pathlib import Path
 import subprocess
@@ -12,7 +13,7 @@ import urllib.request
 
 from PIL import Image, ImageCms
 from filelock import FileLock
-from src.server import Library, image_preview, image_date, open_local
+from src.server import Library, LocalHTTPServer, image_preview, image_date, open_local
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -65,20 +66,27 @@ class ImageTest(unittest.TestCase):
 
 class LauncherTest(unittest.TestCase):
     def test_help_and_missing_directory(self):
-        command = (['cmd', '/c', str(ROOT / 'run.bat')] if os.name == 'nt'
+        command = (['cmd', '/d', '/c', str(ROOT / 'run.bat')] if os.name == 'nt'
                    else ['bash', str(ROOT / 'run.sh')])
         with tempfile.TemporaryDirectory(prefix='Launcher test ') as temp:
             help_result = subprocess.run([*command, '--help'], cwd=temp, capture_output=True, timeout=15)
             self.assertEqual(help_result.returncode, 0, help_result.stderr)
             self.assertIn(b'Usage:', help_result.stdout)
             empty_result = subprocess.run(command, cwd=temp, capture_output=True, timeout=15)
-            self.assertEqual(empty_result.returncode, 1, empty_result.stderr)
+            self.assertEqual(empty_result.returncode, 1, (empty_result.stdout, empty_result.stderr))
             bad_result = subprocess.run([*command, str(Path(temp) / 'missing photos')], cwd=temp,
                                         capture_output=True, timeout=15)
-            self.assertEqual(bad_result.returncode, 1, bad_result.stderr)
+            self.assertEqual(bad_result.returncode, 1, (bad_result.stdout, bad_result.stderr))
 
 
 class ServerProcessTest(unittest.TestCase):
+    def test_loopback_server_never_resolves_dns(self):
+        with patch('socket.getfqdn', side_effect=AssertionError('Startup must not resolve DNS')):
+            with LocalHTTPServer(('127.0.0.1', 0), BaseHTTPRequestHandler) as server:
+                self.assertEqual(server.server_name, '127.0.0.1')
+                self.assertGreater(server.server_port, 0)
+                self.assertEqual(server.server_port, server.socket.getsockname()[1])
+
     def test_server_and_second_instance_with_unicode_paths(self):
         with tempfile.TemporaryDirectory(prefix='Проверка сервера ') as temp:
             root = Path(temp)
@@ -86,14 +94,22 @@ class ServerProcessTest(unittest.TestCase):
             media.mkdir()
             Image.new('RGB', (120, 60), 'blue').save(media / 'Кадр.jpg')
             data = root / 'Данные'
-            command = [sys.executable, '-X', 'utf8', str(ROOT / 'src/server.py'), '--root', str(media), '--data', str(data), '--port', '0']
+            # If CI startup stalls, include the child's stack in server.log.
+            bootstrap = ('import faulthandler, os, runpy, sys; '
+                         'faulthandler.dump_traceback_later(15); '
+                         'sys.argv = sys.argv[1:]; '
+                         'sys.path.insert(0, os.path.dirname(sys.argv[0])); '
+                         'runpy.run_path(sys.argv[0], run_name="__main__")')
+            command = [sys.executable, '-u', '-X', 'utf8', '-c', bootstrap, str(ROOT / 'src/server.py'), '--root', str(media), '--data', str(data), '--port', '0']
             with (root / 'server.log').open('w', encoding='utf-8') as log:
                 process = subprocess.Popen(command, stdout=log, stderr=log)
                 try:
                     deadline = time.monotonic() + 20
                     while not (data / 'runtime.json').exists() and process.poll() is None and time.monotonic() < deadline:
                         time.sleep(.05)
-                    self.assertTrue((data / 'runtime.json').exists(), (root / 'server.log').read_text(encoding='utf-8'))
+                    self.assertTrue((data / 'runtime.json').exists(),
+                                    f'Server exit code: {process.poll()}\n' +
+                                    (root / 'server.log').read_text(encoding='utf-8'))
                     url = json.loads((data / 'runtime.json').read_text(encoding='utf-8'))['url']
                     with urllib.request.urlopen(url + '/api/library', timeout=5) as response:
                         library = json.load(response)

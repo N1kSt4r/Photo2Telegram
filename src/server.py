@@ -18,6 +18,7 @@ import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from urllib.parse import urlparse, parse_qs
 
 from PIL import Image, ImageCms, ImageOps
@@ -473,6 +474,14 @@ def handler_for(library):
     return Handler
 
 
+class LocalHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind calls socket.getfqdn(), which can block on
+        # macOS DNS configuration. A loopback-only app needs no DNS name.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', type=Path, default=APP.parent)
@@ -499,7 +508,7 @@ def main():
         server = None
         for port in range(args.port, args.port + 20):
             try:
-                server = ThreadingHTTPServer(('127.0.0.1', port), handler_for(library))
+                server = LocalHTTPServer(('127.0.0.1', port), handler_for(library))
                 break
             except PermissionError:
                 raise SystemExit('Нет разрешения открыть локальный сервер')
