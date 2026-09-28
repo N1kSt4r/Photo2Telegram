@@ -3,15 +3,56 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let photos = [], byId, state, token, tab = 'photos', current = null, viewerIds = [], visible = [];
 let cacheStatsTimer = null;
+let largeDisplayRequest = 0, largeLoadingTimer = null;
+const decodedLargePhotos = new Map();
+function decodeLargePhoto(blob) {
+  let entry=decodedLargePhotos.get(blob);
+  if (!entry) {
+    const image=new Image();
+    image.src=blob;
+    entry={image, ready:false};
+    entry.promise=image.decode().then(()=>{entry.ready=true;});
+  }
+  decodedLargePhotos.delete(blob);
+  decodedLargePhotos.set(blob,entry);
+  while(decodedLargePhotos.size>3) decodedLargePhotos.delete(decodedLargePhotos.keys().next().value);
+  return entry;
+}
+function finishLargeLoading() {
+  clearTimeout(largeLoadingTimer);
+  $('#largeLoading').hidden=true;
+  $('#largePhoto').classList.remove('large-loading');
+}
 let dirty = false, saving = null, saveTimer, toastTimer, blocked = false, dragId = null, exportId;
 const currentPost = () => state.posts.find(p => p.id === state.active);
 const photoURL = (id, large=false) => byId.get(id)?.missing ? '/missing.svg' : `/photo/${id}?v=${encodeURIComponent(byId.get(id)?.version || '2')}${large ? '&size=large' : ''}`;
-const largePreviews = new LargePreviewLoader((url, blob) => {
+const largePreviews = new LargePreviewLoader(async (url, blob) => {
   if (!current || byId.get(current)?.kind === 'video' || byId.get(current)?.missing || photoURL(current, true) !== url) return;
-  $('#largeLoading').hidden=true;
-  $('#largeError').hidden=Boolean(blob);
-  $('#largePhoto').hidden=!blob;
-  if (blob && $('#largePhoto').getAttribute('src') !== blob) $('#largePhoto').src=blob;
+  const request=++largeDisplayRequest;
+  const img=$('#largePhoto');
+  // Keep the previous image blurred until the replacement is decoded, too.
+  try {
+    if (!blob) throw new Error('Preview unavailable');
+    if (img.getAttribute('src') !== blob) {
+      const decoded=decodeLargePhoto(blob);
+      if (!decoded.ready) await decoded.promise;
+    }
+    if (request !== largeDisplayRequest) return;
+    if (img.getAttribute('src') !== blob) img.src=blob;
+    finishLargeLoading();
+    img.hidden=false;
+    img.classList.remove('large-loading');
+    img.removeAttribute('aria-hidden');
+    $('#largeLoading').hidden=true;
+    $('#largeError').hidden=true;
+  } catch (_) {
+    if (request !== largeDisplayRequest) return;
+    finishLargeLoading();
+    img.hidden=true;
+    img.classList.remove('large-loading');
+    $('#largeLoading').hidden=true;
+    $('#largeError').hidden=false;
+  }
 }, busy => {
   previews.largePending=busy;
   if (!busy) previews.schedule();
@@ -141,15 +182,28 @@ function openViewer(id) {
   viewerIds=[...new Set(ids)]; current=id;
   $('#viewer').hidden=false; renderViewer(); $('#closeViewer').focus({preventScroll:true});
 }
-function closeViewer() { largePreviews.close(); stopVideo(); const old=current; current=null; $('#viewer').hidden=true; previews.schedule(); const b=document.querySelector(`[data-photo="${old}"] .open-photo`); b?.focus({preventScroll:true}); }
+function closeViewer() { finishLargeLoading(); ++largeDisplayRequest; largePreviews.close(); stopVideo(); const old=current; current=null; $('#viewer').hidden=true; previews.schedule(); const b=document.querySelector(`[data-photo="${old}"] .open-photo`); b?.focus({preventScroll:true}); }
 function stopVideo() { const v=$('#largeVideo'); v.pause(); if(v.hasAttribute('src')) {v.removeAttribute('src');v.load();} }
 function renderViewer() {
   const p=byId.get(current); if(!p) return;
+  ++largeDisplayRequest;
   const img=$('#largePhoto');
   const video=$('#largeVideo'), isVideo=p.kind==='video'&&!p.missing;
   $('#missingMessage').hidden=!p.missing;
-  $('#videoPanel').hidden=!isVideo; img.hidden=true;
-  $('#largeLoading').hidden=isVideo || p.missing;
+  $('#videoPanel').hidden=!isVideo;
+  const showPrevious=!isVideo && !p.missing && img.complete && img.naturalWidth>0;
+  img.hidden=!showPrevious;
+  finishLargeLoading();
+  img.setAttribute('aria-hidden','true');
+  if (!isVideo && !p.missing) {
+    const requested=current;
+    // Cached images usually decode within a frame: avoid flashing the overlay.
+    largeLoadingTimer=setTimeout(()=>{
+      if (current!==requested || $('#viewer').hidden) return;
+      img.classList.toggle('large-loading',showPrevious);
+      $('#largeLoading').hidden=false;
+    },30);
+  }
   $('#largeError').hidden=true;
   if(isVideo) {
     $('#largeError').hidden=true;

@@ -13,3 +13,6 @@ img.preview-pending{opacity:0}.preview-loading{background:linear-gradient(110deg
 #cacheSettings{margin-top:14px;color:var(--green)}#cacheLimit{display:block;width:100%;margin-top:8px;padding:9px;border:1px solid var(--line);border-radius:7px;background:white}.cache-actions{display:flex;gap:10px;margin-top:18px}#cacheStats{font-variant-numeric:tabular-nums}
 
 .cache-row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}.cache-row strong{white-space:nowrap;font-weight:500;font-variant-numeric:tabular-nums}
+
+#largePhoto.large-loading{filter:blur(16px) brightness(.45);pointer-events:none}
+#largeLoading{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:12px 18px;border-radius:10px;background:#191d19b3;color:#f5f5ef;text-align:center;pointer-events:none}
