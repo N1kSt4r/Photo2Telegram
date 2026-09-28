@@ -24,6 +24,11 @@ from PIL import Image, ImageCms, ImageOps
 from pillow_heif import register_heif_opener
 from filelock import FileLock, Timeout
 
+if __package__:
+    from .preview_cache import PreviewCache
+else:
+    from preview_cache import PreviewCache
+
 register_heif_opener()
 
 APP = Path(__file__).resolve().parent
@@ -92,9 +97,14 @@ class Library:
         self.data.mkdir(parents=True, exist_ok=True)
         self.cache = self.data / 'previews'
         self.cache.mkdir(exist_ok=True)
+        self.preview_cache = PreviewCache(self.cache, self.data / 'cache-settings.json')
         self.state_path = self.data / 'project.json'
         self.lock = threading.RLock()
-        self.conversions = threading.Semaphore(3)
+        self.conversions = threading.Semaphore(6)
+        self.nearby_conversions = threading.Semaphore(6)
+        self.background_conversions = threading.Semaphore(3)
+        self.large_conversions = threading.Semaphore(1)
+        self.large_background_conversions = threading.Semaphore(3)
         self.image_locks = {}
         self.token = secrets.token_urlsafe(32)
         self.jobs = {}
@@ -102,30 +112,82 @@ class Library:
         self.ffprobe = shutil.which('ffprobe') or ('/opt/homebrew/bin/ffprobe' if Path('/opt/homebrew/bin/ffprobe').exists() else None)
         self.photos = []
         self.files = {}
-        for p in sorted(self.root.iterdir()):
-            if not p.is_file() or p.suffix.lower() not in EXTENSIONS:
-                continue
-            ident = hashlib.sha256(p.name.encode()).hexdigest()[:20]
-            match = re.match(r'(\d{4}-\d{2}-\d{2})[ _](\d{2})[-:](\d{2})[-:](\d{2})', p.stem)
-            if match:
-                date = f'{match[1]}T{match[2]}:{match[3]}:{match[4]}'
-                source = 'filename'
-            elif p.suffix.lower() in VIDEO_EXTENSIONS:
-                date = datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec='seconds')
-                source = 'file'
-            else:
-                metadata_date = image_date(p)
-                date = metadata_date or datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec='seconds')
-                source = 'metadata' if metadata_date else 'file'
-            self.photos.append(dict(id=ident, name=p.name, date=date, dateSource=source, kind='video' if p.suffix.lower() in VIDEO_EXTENSIONS else 'photo'))
-            self.files[ident] = p
-            if p.suffix.lower() in VIDEO_EXTENSIONS:
-                self.photos[-1]['duration'] = self.video_duration(p, ident)
-        self.photos.sort(key=lambda p: (p['date'], p['name']))
+        self.catalog_path = self.data / 'library.json'
+        self.catalog = {}
+        if self.catalog_path.exists():
+            self.catalog = json.loads(self.catalog_path.read_text(encoding='utf-8'))
         self.state = dict(revision=0, hidden=[], posts=[], active=None)
         if self.state_path.exists():
             self.state = json.loads(self.state_path.read_text(encoding='utf-8'))
-            self.validate(self.state)
+        # Legacy projects stored only IDs. Keep unresolved references editable.
+        references = list(self.state.get('hidden', []))
+        for post in self.state.get('posts', []):
+            references.extend(post.get('photos', []))
+        for ident in references:
+            if isinstance(ident, str) and ident not in self.catalog:
+                self.catalog[ident] = dict(id=ident, name=f'Недоступный файл ({ident})',
+                                          date='', dateSource='unknown', kind='photo')
+        self.refresh()
+        self.validate(self.state)
+
+    def refresh(self):
+        """Rescan direct children; preserve identities by filename, never by content."""
+        with self.lock:
+            # Fail before changing the catalog if the root itself is unavailable.
+            paths = sorted(self.root.iterdir())
+            catalog = {ident: dict(photo, missing=True) for ident, photo in self.catalog.items()}
+            files = {}
+            for path in paths:
+                if path.suffix.lower() not in EXTENSIONS:
+                    continue
+                try:
+                    if not path.is_file():
+                        continue
+                    stat = path.stat()
+                    ident = hashlib.sha256(path.name.encode()).hexdigest()[:20]
+                    version = f'{stat.st_mtime_ns}-{stat.st_size}'
+                    previous = self.catalog.get(ident)
+                    if previous and previous.get('version') == version:
+                        photo = dict(previous, missing=False)
+                    else:
+                        match = re.match(r'(\d{4}-\d{2}-\d{2})[ _](\d{2})[-:](\d{2})[-:](\d{2})', path.stem)
+                        if match:
+                            date = f'{match[1]}T{match[2]}:{match[3]}:{match[4]}'
+                            source = 'filename'
+                        else:
+                            metadata_date = image_date(path) if path.suffix.lower() not in VIDEO_EXTENSIONS else None
+                            date = metadata_date or datetime.fromtimestamp(stat.st_mtime).isoformat(timespec='seconds')
+                            source = 'metadata' if metadata_date else 'file'
+                        photo = dict(id=ident, name=path.name, date=date, dateSource=source,
+                                     kind='video' if path.suffix.lower() in VIDEO_EXTENSIONS else 'photo',
+                                     version=version, missing=False)
+                        if photo['kind'] == 'video':
+                            photo['duration'] = self.video_duration(path, ident)
+                    catalog[ident] = photo
+                    files[ident] = path
+                except OSError:
+                    # A file can disappear while the directory is being scanned.
+                    continue
+            atomic_json(self.catalog_path, catalog)
+            self.catalog = catalog
+            self.files = files
+            self.photos = sorted(catalog.values(), key=lambda photo: (photo['date'], photo['name']))
+            allowed = set()
+            for ident, photo in catalog.items():
+                if photo.get('missing') or not photo.get('version'):
+                    continue
+                prefix = f"{ident}-{photo['version']}"
+                allowed.update({f'{prefix}-480-v2.jpg', f'{prefix}-1800-v2.jpg', f'{prefix}-duration.json'})
+            self.preview_cache.prune_obsolete(allowed)
+            # Restore cleared metadata from the catalog without probing videos
+            # again. Only known durations of the same file version are reused.
+            for photo in self.photos:
+                if photo['kind'] == 'video' and not photo.get('missing'):
+                    try:
+                        photo['duration'] = self.video_duration(files[photo['id']], photo['id'], known=photo.get('duration'))
+                    except OSError:
+                        pass
+            return self.photos
 
     def validate(self, value):
         if not isinstance(value, dict) or not isinstance(value.get('revision'), int):
@@ -141,20 +203,20 @@ class Library:
             photos = post.get('photos')
             if not isinstance(photos, list) or len(photos) > 10 or any(not isinstance(i, str) for i in photos) or len(set(photos)) != len(photos):
                 raise ValueError('В посте может быть не более 10 разных файлов')
-            if any(i not in self.files for i in photos):
-                raise ValueError('Фото из проекта отсутствует в исходной папке')
+            if any(i not in self.catalog for i in photos):
+                raise ValueError('Неизвестный файл в проекте')
             if not isinstance(post.get('caption'), str) or len(post['caption']) > 100000:
                 raise ValueError('Некорректная подпись')
             if not isinstance(post.get('title'), str) or len(post['title']) > 200:
                 raise ValueError('Некорректное название')
-        if any(not isinstance(i, str) or i not in self.files for i in hidden):
+        if any(not isinstance(i, str) or i not in self.catalog for i in hidden):
             raise ValueError('Неизвестные скрытые файлы')
         if value.get('active') is not None and value['active'] not in ids:
             raise ValueError('Неизвестный текущий пост')
 
     def save(self, value):
-        self.validate(value)
         with self.lock:
+            self.validate(value)
             if value['revision'] != self.state['revision']:
                 return None
             value['revision'] += 1
@@ -164,49 +226,63 @@ class Library:
             self.state = value
             return value['revision']
 
-    def video_duration(self, path, ident):
+    def video_duration(self, path, ident, known=None):
         cache = self.cache / f'{ident}-{path.stat().st_mtime_ns}-{path.stat().st_size}-duration.json'
-        try:
-            if cache.exists():
-                return json.loads(cache.read_text(encoding='utf-8'))['duration']
-            if not self.ffprobe:
+        with self.preview_cache.use(cache):
+            try:
+                if cache.exists():
+                    duration = json.loads(cache.read_text(encoding='utf-8'))['duration']
+                    self.preview_cache.record(cache)
+                    return duration
+                if isinstance(known, (int, float)) and math.isfinite(known) and known >= 0:
+                    duration = known
+                else:
+                    if not self.ffprobe:
+                        return None
+                    result = subprocess.run([self.ffprobe, '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', str(path)], capture_output=True, text=True, timeout=15, check=True)
+                    duration = float(json.loads(result.stdout)['format']['duration'])
+                if not math.isfinite(duration) or duration < 0:
+                    return None
+                with self.preview_cache.condition:
+                    atomic_json(cache, {'duration': duration})
+                    self.preview_cache.record(cache)
+                return duration
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError):
                 return None
-            result = subprocess.run([self.ffprobe, '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', str(path)], capture_output=True, text=True, timeout=15, check=True)
-            duration = float(json.loads(result.stdout)['format']['duration'])
-            if not math.isfinite(duration) or duration < 0:
-                return None
-            atomic_json(cache, {'duration': duration})
-            return duration
-        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-            return None
 
-    def preview(self, ident, size):
+    def preview(self, ident, size, priority='visible', read_bytes=False):
         p = self.files[ident]
         fingerprint = f'{p.stat().st_mtime_ns}-{p.stat().st_size}'
         target = self.cache / f'{ident}-{fingerprint}-{size}-v2.jpg'
         with self.lock:
             lock = self.image_locks.setdefault((ident, size), threading.Lock())
-        with lock:
-            if not target.exists():
-                with self.conversions:
-                    temp = target.with_suffix('.tmp.jpg')
-                    if p.suffix.lower() in VIDEO_EXTENSIONS:
-                        if not self.ffmpeg:
-                            raise RuntimeError('FFmpeg недоступен')
-                        duration = self.video_duration(p, ident)
-                        seek = min(1, duration / 3) if duration else 0
-                        command = [self.ffmpeg, '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-threads', '1', '-ss', str(seek), '-i', str(p), '-map', '0:v:0', '-frames:v', '1', '-vf', f'scale={size}:{size}:force_original_aspect_ratio=decrease', '-q:v', '3', '-threads', '1', str(temp)]
-                        result = subprocess.run(command, capture_output=True, timeout=90)
-                        if result.returncode:
+        with self.preview_cache.use(target):
+            with lock:
+                if not target.exists():
+                    pool = (self.large_background_conversions if priority == 'background' else
+                            self.large_conversions) if size > 480 else (
+                        self.nearby_conversions if priority == 'nearby' else
+                        self.background_conversions if priority == 'background' else self.conversions)
+                    with pool:
+                        temp = target.with_suffix('.tmp.jpg')
+                        if p.suffix.lower() in VIDEO_EXTENSIONS:
+                            if not self.ffmpeg:
+                                raise RuntimeError('FFmpeg недоступен')
+                            duration = self.video_duration(p, ident)
+                            seek = min(1, duration / 3) if duration else 0
+                            command = [self.ffmpeg, '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-threads', '1', '-ss', str(seek), '-i', str(p), '-map', '0:v:0', '-frames:v', '1', '-vf', f'scale={size}:{size}:force_original_aspect_ratio=decrease', '-q:v', '3', '-threads', '1', str(temp)]
+                            result = subprocess.run(command, capture_output=True, timeout=90)
+                            if result.returncode:
+                                temp.unlink(missing_ok=True)
+                                raise RuntimeError('Не удалось создать превью видео')
+                        else:
+                            image_preview(p, temp, size)
+                        if not temp.exists() or temp.stat().st_size == 0:
                             temp.unlink(missing_ok=True)
-                            raise RuntimeError('Не удалось создать превью видео')
-                    else:
-                        image_preview(p, temp, size)
-                    if not temp.exists() or temp.stat().st_size == 0:
-                        temp.unlink(missing_ok=True)
-                        raise RuntimeError('Не удалось создать превью')
-                    temp.replace(target)
-        return target
+                            raise RuntimeError('Не удалось создать превью')
+                        temp.replace(target)
+            self.preview_cache.record(target)
+            return target.read_bytes() if read_bytes else target
 
     def export(self):
         with self.lock:
@@ -215,6 +291,13 @@ class Library:
                 raise ValueError('Сначала добавьте фото или видео в пост')
             if any(len(p['caption']) > 1024 for p in posts):
                 raise ValueError('Для экспорта сократите подписи до 1024 символов')
+            missing = sorted({self.catalog[ident]['name'] for post in posts for ident in post['photos']
+                              if ident not in self.files or not self.files[ident].is_file()})
+            if missing:
+                names = ', '.join(missing[:5])
+                suffix = f' и ещё {len(missing) - 5}' if len(missing) > 5 else ''
+                raise ValueError(f'В постах есть недоступные файлы: {names}{suffix}. Верните их и обновите библиотеку или уберите из постов.')
+            export_files = dict(self.files)
             ident = uuid.uuid4().hex
             job = dict(status='working', done=0, total=sum(len(p['photos']) for p in posts), path='')
             self.jobs[ident] = job
@@ -229,7 +312,7 @@ class Library:
                     folder.mkdir()
                     exported = []
                     for i, photo in enumerate(post['photos'], 1):
-                        src = self.files[photo]
+                        src = export_files[photo]
                         name = f'{i:02d} — {src.name}'
                         shutil.copy2(src, folder / name)
                         exported.append(name)
@@ -259,7 +342,7 @@ def handler_for(library):
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Cache-Control', 'public, max-age=31536000, immutable' if cache else 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
-            self.send_header('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
+            self.send_header('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
             self.end_headers()
             try:
                 self.wfile.write(data)
@@ -314,6 +397,8 @@ def handler_for(library):
                 return self.respond(403, {'error': 'Forbidden host'})
             url = urlparse(self.path)
             try:
+                if url.path == '/api/cache':
+                    return self.respond(200, library.preview_cache.stats())
                 if url.path == '/api/library':
                     with library.lock:
                         return self.respond(200, dict(photos=library.photos, state=library.state, token=library.token, folder=library.root.name))
@@ -327,14 +412,16 @@ def handler_for(library):
                 if url.path.startswith('/photo/'):
                     ident = url.path.rsplit('/', 1)[1]
                     size = 1800 if parse_qs(url.query).get('size') == ['large'] else 480
+                    if ident in library.catalog and (ident not in library.files or not library.files[ident].is_file()):
+                        return self.respond(200, (APP / 'web' / 'missing.svg').read_bytes(), 'image/svg+xml')
                     try:
-                        path = library.preview(ident, size)
+                        preview = library.preview(ident, size, priority=self.headers.get('X-Preview-Priority', 'visible'), read_bytes=True)
                     except (OSError, RuntimeError, subprocess.SubprocessError):
                         if library.files[ident].suffix.lower() in VIDEO_EXTENSIONS:
                             return self.respond(200, (APP / 'web' / 'video.svg').read_bytes(), 'image/svg+xml')
                         raise
-                    return self.respond(200, path.read_bytes(), 'image/jpeg', True)
-                files = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/video.svg': 'video.svg'}
+                    return self.respond(200, preview, 'image/jpeg', True)
+                files = {'/': 'index.html', '/app.js': 'app.js', '/previews.js': 'previews.js', '/style.css': 'style.css', '/video.svg': 'video.svg', '/missing.svg': 'missing.svg'}
                 if url.path not in files:
                     return self.respond(404, {'error': 'Not found'})
                 name = files[url.path]
@@ -353,6 +440,12 @@ def handler_for(library):
                 if size > 4_000_000:
                     return self.respond(413, {'error': 'Слишком большой запрос'})
                 data = json.loads(self.rfile.read(size) or b'{}')
+                if self.path == '/api/cache/clear':
+                    return self.respond(200, library.preview_cache.clear())
+                if self.path == '/api/cache/limit':
+                    return self.respond(200, library.preview_cache.set_limit(data.get('limit_bytes')))
+                if self.path == '/api/refresh':
+                    return self.respond(200, {'photos': library.refresh()})
                 if self.path == '/api/state':
                     revision = library.save(data)
                     if revision is None:

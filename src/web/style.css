@@ -5,3 +5,11 @@ header{position:sticky;top:0}aside{top:84px;height:calc(100vh - 84px);max-height
 #videoPanel{height:100%;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;min-height:0}#largeVideo{width:100%;min-height:0;flex:1;object-fit:contain}#videoError{max-width:400px;text-align:center;line-height:1.7;color:#b7bfb3}#openVideo{flex-shrink:0;background:#ffffff10;color:white;border-color:#ffffff30;font-size:12px;margin-bottom:8px}
 
 .open-photo,.mini-open,.post-strip button{position:relative}.video-badge{position:absolute;right:5px;bottom:5px;background:#152319dc;color:white;font-size:11px;line-height:1.4;padding:2px 5px;border-radius:4px;pointer-events:none;font-variant-numeric:tabular-nums}.mini .video-badge{font-size:8px;right:2px;bottom:3px;padding:1px 2px}.mini .number{z-index:1}
+
+#libraryNotice{padding:12px 16px;background:#fff0d8;color:#7b542b;border-radius:8px;font-size:12px;line-height:1.6}.missing-badge{position:absolute;bottom:5px;left:4px;right:4px;text-align:center;font-size:10px;background:#704c36e8;color:white;padding:3px;border-radius:4px;pointer-events:none}.mini .missing-badge{font-size:7px;bottom:18px;padding:1px;left:1px;right:1px}#missingMessage{max-width:420px;text-align:center;line-height:1.7;color:#d0c2b3}#refreshLibrary{font-size:12px}.header-actions{gap:12px}
+
+img.preview-pending{opacity:0}.preview-loading{background:linear-gradient(110deg,#e4e5df 30%,#f2f3ed 50%,#e4e5df 70%)!important;background-size:200% 100%!important;animation:preview-shimmer 1.4s ease infinite}@keyframes preview-shimmer{to{background-position:-200% 0}}@media(prefers-reduced-motion:reduce){.preview-loading{animation:none}}
+
+#cacheSettings{margin-top:14px;color:var(--green)}#cacheLimit{display:block;width:100%;margin-top:8px;padding:9px;border:1px solid var(--line);border-radius:7px;background:white}.cache-actions{display:flex;gap:10px;margin-top:18px}#cacheStats{font-variant-numeric:tabular-nums}
+
+.cache-row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}.cache-row strong{white-space:nowrap;font-weight:500;font-variant-numeric:tabular-nums}
