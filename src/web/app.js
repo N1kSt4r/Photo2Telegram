@@ -52,7 +52,7 @@ function updateCounts() {
   $('#photoCount').textContent=photos.length;
   $('#postCount').textContent=state.posts.filter(p=>p.photos.length).length;
   $('#hiddenCount').textContent=state.hidden.length;
-  $('#stats').innerHTML=`<strong>${photos.length.toLocaleString('ru')}</strong>кадров в вашей истории`;
+  $('#stats').innerHTML=`<strong>${photos.length.toLocaleString('ru')}</strong>файлов в медиатеке`;
 }
 function render() { updateCounts(); renderSidebar(); renderContent(); if(current) renderViewer(); }
 function renderContent() {
@@ -69,7 +69,7 @@ function renderGallery() {
   visible.forEach(p=>{
     const date=p.date.slice(0,10);
     if(date!==last) { if(last) html+='</div>'; html+=`<h3 class="day-title">${esc(dateLabel(date))}</h3><div class="grid">`;last=date; }
-    html+=`<article class="photo ${selected.has(p.id)?'selected':''}" data-photo="${p.id}"><button class="open-photo" data-open="${p.id}" aria-label="Открыть ${esc(p.name)}"><img loading="lazy" decoding="async" src="${photoURL(p.id)}" alt="${esc(p.name)}">${videoBadge(p.id)}</button><button class="select-photo" data-pick="${p.id}" aria-label="Выбрать фото" aria-pressed="${selected.has(p.id)}">${selected.has(p.id)?currentPost().photos.indexOf(p.id)+1:'＋'}</button>${used.has(p.id)?`<span class="used-badge">Пост ${used.get(p.id).join(', ')}</span>`:''}<div class="photo-meta"><span>${p.date.slice(8,10)}.${p.date.slice(5,7)} · ${p.date.slice(11,16)}</span><button class="hide-card" data-hide="${p.id}">${hidden.has(p.id)?'Вернуть':'Скрыть'}</button></div></article>`;
+    html+=`<article class="photo ${selected.has(p.id)?'selected':''}" data-photo="${p.id}"><button class="open-photo" data-open="${p.id}" aria-label="Открыть ${esc(p.name)}"><img loading="lazy" decoding="async" src="${photoURL(p.id)}" alt="${esc(p.name)}">${videoBadge(p.id)}</button><button class="select-photo" data-pick="${p.id}" aria-label="Выбрать файл" aria-pressed="${selected.has(p.id)}">${selected.has(p.id)?currentPost().photos.indexOf(p.id)+1:'＋'}</button>${used.has(p.id)?`<span class="used-badge">Пост ${used.get(p.id).join(', ')}</span>`:''}<div class="photo-meta"><span>${p.date.slice(8,10)}.${p.date.slice(5,7)} · ${p.date.slice(11,16)}</span><button class="hide-card" data-hide="${p.id}">${hidden.has(p.id)?'Вернуть':'Скрыть'}</button></div></article>`;
   });
   $('#gallery').innerHTML=html+(last?'</div>':'<div class="empty"><strong>Здесь пока нет фото и видео</strong>Измените фильтры или верните скрытые кадры.</div>');
 }
@@ -79,7 +79,7 @@ function renderSidebar() {
   $('#postSelect').value=state.active;
   $('#title').value=p?.title || ''; $('#caption').value=p?.caption || '';
   $('#selectionCount').textContent=`${p?.photos.length || 0} / 10`;
-  let html=(p?.photos || []).map((id,n)=>`<div class="mini" draggable="true" data-mini="${id}" title="Перетащите для перестановки. Alt + ← / → на миниатюре — переместить."><button class="mini-open" data-open="${id}" data-reorder="${id}" aria-label="Фото ${n+1}: ${esc(byId.get(id).name)}"><img src="${photoURL(id)}" alt="" draggable="false">${videoBadge(id)}</button><span class="number">${n+1}</span><button class="remove" data-pick="${id}" aria-label="Убрать фото ${n+1}">×</button></div>`).join('');
+  let html=(p?.photos || []).map((id,n)=>`<div class="mini" draggable="true" data-mini="${id}" title="Перетащите для перестановки. Alt + ← / → на миниатюре — переместить."><button class="mini-open" data-open="${id}" data-reorder="${id}" aria-label="Файл ${n+1}: ${esc(byId.get(id).name)}"><img src="${photoURL(id)}" alt="" draggable="false">${videoBadge(id)}</button><span class="number">${n+1}</span><button class="remove" data-pick="${id}" aria-label="Убрать файл ${n+1}">×</button></div>`).join('');
   for(let i=p?.photos.length || 0;i<10;i++) html+='<div class="slot">＋</div>';
   $('#selection').innerHTML=html;
   captionCount();
@@ -102,7 +102,7 @@ function hide(id) {
   const wasCurrent=current===id, index=viewerIds.indexOf(id);
   if(wasCurrent) { viewerIds=viewerIds.filter(x=>x!==id); current=viewerIds[Math.min(index,viewerIds.length-1)] || null; if(!current) closeViewer(); }
   changed();render();
-  toast(i>=0?'Фото возвращено в общую ленту':'Фото скрыто. Вернуть его можно во вкладке «Скрытые».');
+  toast(i>=0?'Файл возвращён в общую ленту':'Файл скрыт. Вернуть его можно во вкладке «Скрытые».');
 }
 function openViewer(id) {
   let ids=tab==='posts'?state.posts.flatMap(p=>p.photos):visible.map(p=>p.id);
@@ -154,7 +154,7 @@ function bind() {
     else if(b.dataset.edit){state.active=b.dataset.edit;changed();render();}
     else if(b.dataset.postUp)movePost(b.dataset.postUp,-1);
     else if(b.dataset.postDown)movePost(b.dataset.postDown,1);
-    else if(b.dataset.delete){if(!confirm('Удалить черновик поста? Исходные фотографии останутся на месте.'))return;state.posts=state.posts.filter(p=>p.id!==b.dataset.delete);if(state.active===b.dataset.delete)state.active=state.posts[0]?.id || null;if(!state.posts.length)newPost();else{changed();render();}}
+    else if(b.dataset.delete){if(!confirm('Удалить черновик поста? Исходные файлы останутся на месте.'))return;state.posts=state.posts.filter(p=>p.id!==b.dataset.delete);if(state.active===b.dataset.delete)state.active=state.posts[0]?.id || null;if(!state.posts.length)newPost();else{changed();render();}}
   });
   $('#newPost').onclick=()=>{if(!currentPost()?.photos.length){toast('Текущий пост уже пустой — можно добавлять фото и видео');return;}newPost();};
   $('#nextPost').onclick=startNext;
@@ -211,7 +211,7 @@ async function init() {
   try {
     const data=await api('/api/library');photos=data.photos;byId=new Map(photos.map(p=>[p.id,p]));state=data.state;token=data.token;
     $('#folder').textContent=data.folder;
-    const days=[...new Set(photos.map(p=>p.date.slice(0,10)))];$('#day').innerHTML='<option value="">Вся поездка</option>'+days.map(d=>`<option value="${d}">${esc(dateLabel(d))}</option>`).join('');
+    const days=[...new Set(photos.map(p=>p.date.slice(0,10)))];$('#day').innerHTML='<option value="">Все даты</option>'+days.map(d=>`<option value="${d}">${esc(dateLabel(d))}</option>`).join('');
     bind();if(!state.posts.length)newPost();else{if(!currentPost()){state.active=state.posts[0].id;changed();}render();$('#saveStatus').textContent='✓ Сохранено на диске';}
   } catch(e){$('main').innerHTML=`<p class="fatal">Не удалось открыть библиотеку: ${esc(e.message)}<br>Перезапустите приложение и обновите страницу.</p>`;}
 }

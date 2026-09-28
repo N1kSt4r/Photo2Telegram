@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="ru">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Фотопосты</title><link rel="stylesheet" href="/style.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Photo2Telegram</title><link rel="stylesheet" href="/style.css"></head>
 <body>
-<header><div class="brand"><span class="brand-icon">▧</span><div>Фотопосты<small id="folder">Локальная фотомастерская</small></div></div><div class="header-actions"><span id="saveStatus" role="status">Загрузка…</span><button id="export" class="primary">Экспортировать посты ↗</button></div></header>
+<header><div class="brand"><span class="brand-icon">▧</span><div>Photo2Telegram<small id="folder">Локальная медиатека</small></div></div><div class="header-actions"><span id="saveStatus" role="status">Загрузка…</span><button id="export" class="primary">Экспортировать посты ↗</button></div></header>
 <div class="workspace">
 <main>
-<section class="intro"><div><div class="eyebrow">ИСТОРИИ ИЗ ПУТЕШЕСТВИЯ</div><h1>Хорошие кадры.<br><span>В вашем порядке.</span></h1></div><div id="stats" class="stats"></div></section>
+<section class="intro"><div><div class="eyebrow">ПОДГОТОВКА ПОСТОВ</div><h1>Фото и видео.<br><span>В ваших постах.</span></h1></div><div id="stats" class="stats"></div></section>
 <nav class="tabs"><button data-tab="photos" class="active">Фото и видео <span id="photoCount"></span></button><button data-tab="posts">Посты <span id="postCount"></span></button><button data-tab="hidden">Скрытые <span id="hiddenCount"></span></button></nav>
-<div id="photoToolbar" class="toolbar"><label>День <select id="day"><option value="">Вся поездка</option></select></label><label class="check"><input id="unused" type="checkbox"> Только неиспользованные</label><span id="visibleCount"></span></div>
+<div id="photoToolbar" class="toolbar"><label>День <select id="day"><option value="">Все даты</option></select></label><label class="check"><input id="unused" type="checkbox"> Только неиспользованные</label><span id="visibleCount"></span></div>
 <div id="gallery"></div><div id="postList" hidden></div>
 <footer>← → листать · Пробел выбрать · H скрыть · Esc закрыть</footer>
 </main>
@@ -15,16 +15,16 @@
 <div class="aside-top"><div class="eyebrow">КОНСТРУКТОР ПОСТА</div><button id="newPost" class="small">＋ Новый</button></div>
 <div class="post-heading"><h2>Текущий пост</h2><span id="selectionCount" class="pill">0 / 10</span></div>
 <select id="postSelect" aria-label="Выбрать пост"></select>
-<label class="field">Название для себя<input id="title" maxlength="200" placeholder="Например, первое утро в Париже"></label>
+<label class="field">Название для себя<input id="title" maxlength="200" placeholder="Введите название поста"></label>
 <div id="selection" class="selection"></div>
 <p class="hint">Перетаскивайте кадры, чтобы менять порядок. Нажмите на миниатюру для просмотра.</p>
-<label class="field">Подпись<textarea id="caption" placeholder="Что хочется рассказать об этих кадрах…" rows="5"></textarea></label>
+<label class="field">Подпись<textarea id="caption" placeholder="Добавьте подпись к посту…" rows="5"></textarea></label>
 <div class="caption-meta"><span>Текст сохранится рядом с файлами</span><span id="captionCount">0 / 1024</span></div>
 <button id="nextPost" class="primary full">Готово, следующий пост →</button>
 <div class="local-note"><span class="dot"></span> Всё хранится на этом компьютере.<br>Оригиналы остаются нетронутыми.</div>
 </aside>
 </div>
-<section id="viewer" hidden role="dialog" aria-label="Просмотр фото и видео" aria-modal="false"><div class="viewer-top"><div><strong id="viewerName"></strong><small id="viewerInfo"></small></div><button id="closeViewer" aria-label="Закрыть просмотр">✕</button></div><div class="viewer-stage"><button id="previous" class="arrow" aria-label="Предыдущее фото">‹</button><img id="largePhoto" alt=""><div id="videoPanel" hidden><video id="largeVideo" controls playsinline preload="metadata" aria-label="Видеоплеер"></video><p id="videoError" hidden>Браузер не смог воспроизвести это видео. Его можно открыть в системном плеере и добавить в пост.</p><button id="openVideo">Открыть в системном плеере ↗</button></div><div id="largeError" hidden>Не удалось открыть превью. Попробуйте другой снимок.</div><button id="following" class="arrow" aria-label="Следующее фото">›</button></div><div class="viewer-bottom"><button id="hidePhoto">Скрыть · H</button><span id="viewerPosition"></span><button id="pickPhoto" class="primary">Добавить · Пробел</button></div></section>
+<section id="viewer" hidden role="dialog" aria-label="Просмотр фото и видео" aria-modal="false"><div class="viewer-top"><div><strong id="viewerName"></strong><small id="viewerInfo"></small></div><button id="closeViewer" aria-label="Закрыть просмотр">✕</button></div><div class="viewer-stage"><button id="previous" class="arrow" aria-label="Предыдущий файл">‹</button><img id="largePhoto" alt=""><div id="videoPanel" hidden><video id="largeVideo" controls playsinline preload="metadata" aria-label="Видеоплеер"></video><p id="videoError" hidden>Браузер не смог воспроизвести это видео. Его можно открыть в системном плеере и добавить в пост.</p><button id="openVideo">Открыть в системном плеере ↗</button></div><div id="largeError" hidden>Не удалось открыть превью. Попробуйте другой файл.</div><button id="following" class="arrow" aria-label="Следующий файл">›</button></div><div class="viewer-bottom"><button id="hidePhoto">Скрыть · H</button><span id="viewerPosition"></span><button id="pickPhoto" class="primary">Добавить · Пробел</button></div></section>
 <div id="toast" role="status" hidden></div>
 <dialog id="exportDialog"><button id="closeExport" class="dialog-close" aria-label="Закрыть">✕</button><div class="eyebrow">ЭКСПОРТ ПОСТОВ</div><h2 id="exportTitle">Собираем папки…</h2><p id="exportDescription">Копируем оригинальные файлы в порядке постов.</p><progress id="exportProgress" value="0" max="1"></progress><p id="exportPath"></p><button id="reveal" class="primary" hidden>Открыть папку в Finder ↗</button></dialog>
 <script src="/app.js"></script></body></html>

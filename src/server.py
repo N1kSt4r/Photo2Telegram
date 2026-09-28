@@ -96,7 +96,7 @@ class Library:
             if not isinstance(post.get('title'), str) or len(post['title']) > 200:
                 raise ValueError('Некорректное название')
         if any(not isinstance(i, str) or i not in self.files for i in hidden):
-            raise ValueError('Неизвестные скрытые фото')
+            raise ValueError('Неизвестные скрытые файлы')
         if value.get('active') is not None and value['active'] not in ids:
             raise ValueError('Неизвестный текущий пост')
 
@@ -157,7 +157,7 @@ class Library:
         with self.lock:
             posts = json.loads(json.dumps([p for p in self.state['posts'] if p['photos']]))
             if not posts:
-                raise ValueError('Сначала добавьте фотографии в пост')
+                raise ValueError('Сначала добавьте фото или видео в пост')
             if any(len(p['caption']) > 1024 for p in posts):
                 raise ValueError('Для экспорта сократите подписи до 1024 символов')
             ident = uuid.uuid4().hex
@@ -358,7 +358,7 @@ def main():
         raise SystemExit('Не удалось найти свободный порт')
     url = f'http://127.0.0.1:{server.server_port}'
     atomic_json(args.data / 'runtime.json', {'url': url})
-    print(f'Фотопосты: {url}\nНайдено фото и видео: {len(library.photos)}\nДля остановки нажмите Ctrl+C.', flush=True)
+    print(f'Photo2Telegram: {url}\nНайдено фото и видео: {len(library.photos)}\nДля остановки нажмите Ctrl+C.', flush=True)
     if args.open:
         webbrowser.open(url)
     try:
