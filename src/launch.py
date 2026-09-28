@@ -1,4 +1,5 @@
 """Create an isolated environment and launch Photo2Telegram on any supported OS."""
+import argparse
 import hashlib
 import os
 from pathlib import Path
@@ -10,11 +11,13 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
-        print('Usage: run.sh / run.bat "/path/to/photos" [--data "/path/to/project"] [--port 8765]')
-        return 0 if len(sys.argv) > 1 else 1
-    if not Path(sys.argv[1]).is_dir():
-        print(f'Папка не найдена: {sys.argv[1]}', file=sys.stderr)
+    parser = argparse.ArgumentParser(usage='run.sh / run.bat ["/path/to/photos"] [--data DIR] [--port PORT]')
+    parser.add_argument('root', nargs='?', type=Path, default=Path.cwd())
+    parser.add_argument('--data', type=Path)
+    parser.add_argument('--port', type=int)
+    args = parser.parse_args()
+    if not args.root.is_dir():
+        print(f'Папка не найдена: {args.root}', file=sys.stderr)
         return 1
     if sys.version_info < (3, 10):
         print('Нужен Python 3.10 или новее.', file=sys.stderr)
@@ -36,7 +39,11 @@ def main():
         subprocess.run([str(python), '-m', 'pip', 'install', '-r', str(requirements)], check=True)
         marker.write_text(digest, encoding='utf-8')
     os.environ.setdefault('PYTHONUTF8', '1')
-    command = [str(python), str(ROOT / 'src/server.py'), '--root', sys.argv[1], '--open', *sys.argv[2:]]
+    command = [str(python), str(ROOT / 'src/server.py'), '--root', str(args.root), '--open']
+    if args.data is not None:
+        command.extend(['--data', str(args.data)])
+    if args.port is not None:
+        command.extend(['--port', str(args.port)])
     if os.name != 'nt':
         os.execv(str(python), command)
     try:

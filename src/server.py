@@ -330,7 +330,104 @@ class Library:
         return ident
 
 
-def handler_for(library):
+class LibraryManager:
+    """Keep each source folder's drafts separate, including legacy data layouts."""
+    def __init__(self, root, data):
+        self.data = data.resolve()
+        self.data.mkdir(parents=True, exist_ok=True)
+        self.lock = threading.RLock()
+        self.registry_path = self.data / 'folders.json'
+        self.registry = (json.loads(self.registry_path.read_text(encoding='utf-8'))
+                         if self.registry_path.exists() else {})
+        self.current = None
+        self.libraries = {}
+        self.switch(root)
+
+    @staticmethod
+    def key(root):
+        return hashlib.sha256(os.path.normcase(str(root.resolve())).encode()).hexdigest()
+
+    def switch(self, path):
+        if not isinstance(path, (str, Path)) or not str(path).strip():
+            raise ValueError('Укажите путь к папке')
+        root = Path(path).expanduser().resolve()
+        if not root.is_dir():
+            raise ValueError('Папка не найдена или недоступна')
+        with self.lock:
+            if self.current and self.current.root == root:
+                return self.current
+            if self.current and any(job['status'] == 'working' for job in self.current.jobs.values()):
+                raise ValueError('Дождитесь завершения экспорта перед сменой папки')
+            key = self.key(root)
+            # The first folder keeps existing project.json/library.json in place.
+            relative = self.registry.get(key, {}).get('data', '.' if not self.registry else f'projects/{key}')
+            # Reuse locks/cache bookkeeping if requests from the previous visit
+            # are still finishing when this folder is opened again.
+            library = self.libraries.get(key)
+            if library is None:
+                library = Library(root, self.data / relative)
+            else:
+                library.refresh()
+            registry = {**self.registry, key: {'root': str(root), 'data': relative}}
+            atomic_json(self.registry_path, registry)
+            self.registry = registry
+            library.token = secrets.token_urlsafe(32)
+            self.libraries[key] = library
+            self.current = library
+            return library
+
+    def suggest_folders(self, value):
+        if not isinstance(value, str):
+            raise ValueError('Укажите путь к папке')
+        expanded = os.path.expanduser(value)
+        separators = tuple(s for s in (os.sep, os.altsep) if s)
+        if not expanded:
+            parent, prefix = self.current.root, ''
+        elif expanded.endswith(separators) or value == '~':
+            parent, prefix = Path(expanded), ''
+        else:
+            path = Path(expanded)
+            parent, prefix = path.parent, path.name.casefold()
+        matches = []
+        try:
+            for child in parent.iterdir():
+                try:
+                    if child.name.casefold().startswith(prefix) and child.is_dir():
+                        matches.append({'name': child.name, 'path': str(child.absolute()) + os.sep})
+                except OSError:
+                    continue
+        except (OSError, ValueError):
+            return {'folders': []}
+        matches.sort(key=lambda entry: entry['name'].casefold())
+        return {'folders': matches[:100], 'more': len(matches) > 100}
+
+    def folders(self, path, up=False):
+        root = Path(path).expanduser().resolve() if path else self.current.root
+        if up:
+            root = root.parent
+        if not root.is_dir():
+            raise ValueError('Папка не найдена или недоступна')
+        directories = []
+        for child in root.iterdir():
+            try:
+                if child.is_dir():
+                    directories.append({'name': child.name, 'path': str(child)})
+            except OSError:
+                continue
+        directories.sort(key=lambda entry: entry['name'].casefold())
+        shortcuts = [{'name': 'Домашняя папка', 'path': str(Path.home())},
+                     {'name': 'Текущая библиотека', 'path': str(self.current.root)}]
+        if os.name == 'nt':
+            shortcuts.extend({'name': f'{letter}:', 'path': f'{letter}:/'}
+                             for letter in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' if Path(f'{letter}:/').is_dir())
+        input_path = str(root)
+        if not input_path.endswith(os.sep):
+            input_path += os.sep
+        return {'path': str(root), 'inputPath': input_path, 'parent': str(root.parent),
+                'folders': directories, 'shortcuts': shortcuts}
+
+
+def handler_for(manager):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -396,13 +493,18 @@ def handler_for(library):
         def do_GET(self):
             if not self.valid_host():
                 return self.respond(403, {'error': 'Forbidden host'})
+            library = manager.current
             url = urlparse(self.path)
+            if url.path.startswith(('/photo/', '/video/')):
+                project = parse_qs(url.query).get('project')
+                if project and project != [manager.key(library.root)]:
+                    return self.respond(409, {'error': 'Библиотека изменена. Обновите страницу.'})
             try:
                 if url.path == '/api/cache':
                     return self.respond(200, library.preview_cache.stats())
                 if url.path == '/api/library':
                     with library.lock:
-                        return self.respond(200, dict(photos=library.photos, state=library.state, token=library.token, folder=library.root.name))
+                        return self.respond(200, dict(photos=library.photos, state=library.state, token=library.token, folder=library.root.name, folderPath=str(library.root), project=manager.key(library.root)))
                 if url.path.startswith('/api/job/'):
                     return self.respond(200, library.jobs[url.path.rsplit('/', 1)[1]])
                 if url.path.startswith('/video/'):
@@ -434,13 +536,29 @@ def handler_for(library):
                 self.respond(500, {'error': str(e)})
 
         def do_POST(self):
-            if not self.valid_host() or self.headers.get('X-Local-Token') != library.token:
+            with manager.lock:
+                self.handle_post()
+
+        def handle_post(self):
+            library = manager.current
+            if not self.valid_host():
                 return self.respond(403, {'error': 'Нет доступа'})
+            if not self.headers.get('X-Local-Token'):
+                return self.respond(403, {'error': 'Нет доступа'})
+            if self.headers.get('X-Local-Token') != library.token:
+                return self.respond(409, {'error': 'Библиотека изменена в другой вкладке. Обновите страницу.'})
             try:
                 size = int(self.headers.get('Content-Length', '0'))
                 if size > 4_000_000:
                     return self.respond(413, {'error': 'Слишком большой запрос'})
                 data = json.loads(self.rfile.read(size) or b'{}')
+                if self.path == '/api/folder-suggestions':
+                    return self.respond(200, manager.suggest_folders(data.get('path', '')))
+                if self.path == '/api/folders':
+                    return self.respond(200, manager.folders(data.get('path'), up=data.get('up') is True))
+                if self.path == '/api/folder':
+                    manager.switch(data.get('path'))
+                    return self.respond(200, {'ok': True})
                 if self.path == '/api/cache/clear':
                     return self.respond(200, library.preview_cache.clear())
                 if self.path == '/api/cache/limit':
@@ -484,7 +602,7 @@ class LocalHTTPServer(ThreadingHTTPServer):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--root', type=Path, default=APP.parent)
+    parser.add_argument('--root', type=Path, default=Path.cwd())
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--open', action='store_true')
     parser.add_argument('--data', type=Path, default=APP.parent / 'data')
@@ -504,11 +622,12 @@ def main():
                 webbrowser.open(url)
         return
     try:
-        library = Library(args.root, args.data)
+        manager = LibraryManager(args.root, args.data)
+        library = manager.current
         server = None
         for port in range(args.port, args.port + 20):
             try:
-                server = LocalHTTPServer(('127.0.0.1', port), handler_for(library))
+                server = LocalHTTPServer(('127.0.0.1', port), handler_for(manager))
                 break
             except PermissionError:
                 raise SystemExit('Нет разрешения открыть локальный сервер')

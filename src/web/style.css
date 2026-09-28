@@ -16,3 +16,7 @@ img.preview-pending{opacity:0}.preview-loading{background:linear-gradient(110deg
 
 #largePhoto.large-loading{filter:blur(16px) brightness(.45);pointer-events:none}
 #largeLoading{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:12px 18px;border-radius:10px;background:#191d19b3;color:#f5f5ef;text-align:center;pointer-events:none}
+
+#folderDialog{width:640px}#folderControls{border:0;padding:0;margin:0}#folderForm{display:flex;align-items:end;gap:8px}#folderForm label{flex:1;min-width:0}#folderShortcuts{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}#folderShortcuts button{font-size:11px}#folderEntries{display:flex;flex-direction:column;gap:4px;max-height:35vh;overflow:auto;margin-top:10px}#folderEntries button{text-align:left;overflow-wrap:anywhere}#folderMessage{overflow-wrap:anywhere}.header-actions{flex-wrap:wrap}#chooseFolder{font-size:12px}
+
+#folderEntries{height:min(30vh,240px);max-height:none;flex-shrink:0;scrollbar-gutter:stable}#folderEntries button{flex-shrink:0}#folderEntries button:hover,#folderEntries button[aria-selected="true"]{background:var(--pale);color:var(--green)}#folderMessage{height:3.4em;overflow:auto;margin:12px 0}#folderDialog{max-height:calc(100dvh - 32px);overflow:auto}

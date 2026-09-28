@@ -3,6 +3,8 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let photos = [], byId, state, token, tab = 'photos', current = null, viewerIds = [], visible = [];
 let cacheStatsTimer = null;
+let project = '', folderPath = '', folderBrowseRequest = 0;
+let folderSuggestions = [], folderSuggestionIndex = -1, folderSuggestionRequest = 0, folderSuggestionTimer;
 let largeDisplayRequest = 0, largeLoadingTimer = null;
 const decodedLargePhotos = new Map();
 function decodeLargePhoto(blob) {
@@ -25,7 +27,7 @@ function finishLargeLoading() {
 }
 let dirty = false, saving = null, saveTimer, toastTimer, blocked = false, dragId = null, exportId;
 const currentPost = () => state.posts.find(p => p.id === state.active);
-const photoURL = (id, large=false) => byId.get(id)?.missing ? '/missing.svg' : `/photo/${id}?v=${encodeURIComponent(byId.get(id)?.version || '2')}${large ? '&size=large' : ''}`;
+const photoURL = (id, large=false) => byId.get(id)?.missing ? '/missing.svg' : `/photo/${id}?project=${encodeURIComponent(project)}&v=${encodeURIComponent(byId.get(id)?.version || '2')}${large ? '&size=large' : ''}`;
 const largePreviews = new LargePreviewLoader(async (url, blob) => {
   if (!current || byId.get(current)?.kind === 'video' || byId.get(current)?.missing || photoURL(current, true) !== url) return;
   const request=++largeDisplayRequest;
@@ -86,7 +88,14 @@ async function api(path, data) {
   if(!response.ok) { const error=new Error(result.error || 'Ошибка сервера'); error.status=response.status; throw error; }
   return result;
 }
+const emptyPost = post => !post.photos.length && !post.caption.trim();
+function removeEmptyPosts() {
+  const count=state.posts.length;
+  state.posts=state.posts.filter(post=>post.id===state.active || !emptyPost(post));
+  return count!==state.posts.length;
+}
 function changed() {
+  removeEmptyPosts();
   dirty=true; $('#saveStatus').textContent='Сохраняем…'; $('#saveStatus').classList.remove('error');
   clearTimeout(saveTimer); saveTimer=setTimeout(()=>flush().catch(()=>{}),350);
 }
@@ -106,11 +115,12 @@ async function flush() {
   try { await saving; } finally { saving=null; }
 }
 function newPost() {
+  if(currentPost() && emptyPost(currentPost())) {render();return;}
   const p={id:crypto.randomUUID(),title:`Пост ${state.posts.length+1}`,caption:'',photos:[]};
   state.posts.push(p); state.active=p.id; changed(); render();
 }
 function startNext() {
-  if(!currentPost()?.photos.length) return toast('Добавьте хотя бы один файл в текущий пост');
+  if(!currentPost() || emptyPost(currentPost())) return toast('Добавьте фото, видео или текст в текущий пост');
   newPost(); toast('Новый пост готов к сборке');
 }
 function usedIn(id) { return state.posts.filter(p=>p.photos.includes(id)); }
@@ -119,7 +129,7 @@ function updateCounts() {
   const missing=photos.filter(p=>p.missing).length;
   $('#libraryNotice').hidden=!missing;
   $('#libraryNotice').textContent=`Недоступных файлов: ${missing}. Верните файлы в исходную папку и нажмите «Обновить библиотеку» или уберите их из постов. Посты и подписи сохранены.`;
-  $('#postCount').textContent=state.posts.filter(p=>p.photos.length).length;
+  $('#postCount').textContent=state.posts.filter(p=>!emptyPost(p)).length;
   $('#hiddenCount').textContent=state.hidden.length;
   $('#stats').innerHTML=`<strong>${photos.length.toLocaleString('ru')}</strong>файлов в медиатеке`;
 }
@@ -155,7 +165,7 @@ function renderSidebar() {
   previews.refresh();
   captionCount();
 }
-function captionCount() { const length=currentPost()?.caption.length || 0; $('#captionCount').textContent=`${length} / 1024`; $('#captionCount').classList.toggle('over',length>1024); $('#nextPost').disabled=!currentPost()?.photos.length; }
+function captionCount() { const length=currentPost()?.caption.length || 0; $('#captionCount').textContent=`${length} / 1024`; $('#captionCount').classList.toggle('over',length>1024); $('#nextPost').disabled=!currentPost() || emptyPost(currentPost()); }
 function renderPosts() {
   $('#postList').innerHTML=state.posts.map((p,n)=>`<article class="post-card ${p.id===state.active?'current':''}"><div class="post-card-head"><h3><span class="post-number">${String(n+1).padStart(2,'0')}</span>${esc(p.title || 'Без названия')}</h3><div class="post-actions"><button data-post-up="${p.id}" ${n===0?'disabled':''} aria-label="Переместить пост вверх">↑</button><button data-post-down="${p.id}" ${n===state.posts.length-1?'disabled':''} aria-label="Переместить пост вниз">↓</button><button data-edit="${p.id}">Открыть</button><button data-delete="${p.id}" aria-label="Удалить черновик">×</button></div></div><div class="post-strip">${p.photos.map(id=>`<button data-open="${id}"><img decoding="async" data-preview="${photoURL(id)}" alt="${esc(byId.get(id).name)}">${videoBadge(id)}</button>`).join('')}</div>${p.photos.length?'':'<div class="empty">Пока без файлов</div>'}<p class="post-caption">${esc(p.caption || 'Без подписи')}</p></article>`).join('');
   previews.refresh();
@@ -207,7 +217,7 @@ function renderViewer() {
   $('#largeError').hidden=true;
   if(isVideo) {
     $('#largeError').hidden=true;
-    const videoURL='/video/'+current;
+    const videoURL='/video/'+current+'?project='+encodeURIComponent(project);
     if(video.getAttribute('src')!==videoURL) {
       stopVideo(); $('#videoError').hidden=true; video.hidden=false; video.poster=photoURL(current); video.src=videoURL;
     }
@@ -246,7 +256,7 @@ function bind() {
     else if(b.dataset.postDown)movePost(b.dataset.postDown,1);
     else if(b.dataset.delete){if(!confirm('Удалить черновик поста? Исходные файлы останутся на месте.'))return;state.posts=state.posts.filter(p=>p.id!==b.dataset.delete);if(state.active===b.dataset.delete)state.active=state.posts[0]?.id || null;if(!state.posts.length)newPost();else{changed();render();}}
   });
-  $('#newPost').onclick=()=>{if(!currentPost()?.photos.length){toast('Текущий пост уже пустой — можно добавлять фото и видео');return;}newPost();};
+  $('#newPost').onclick=()=>{if(currentPost() && emptyPost(currentPost())){toast('Текущий пост уже пустой — можно добавлять фото, видео или текст');return;}newPost();};
   $('#nextPost').onclick=startNext;
   $('#postSelect').onchange=e=>{state.active=e.target.value;changed();render();};
   $('#title').oninput=e=>{currentPost().title=e.target.value;const option=$('#postSelect').selectedOptions[0];if(option)option.textContent=`${state.posts.indexOf(currentPost())+1}. ${e.target.value || 'Без названия'} · ${currentPost().photos.length} файлов`;changed();if(tab==='posts')renderPosts();};
@@ -257,7 +267,7 @@ function bind() {
   $('#largeVideo').onerror=()=>{if(!$('#largeVideo').hasAttribute('src'))return;$('#videoError').hidden=false;$('#largeVideo').hidden=true;};
   $('#largePhoto').onerror=()=>{$('#largeError').hidden=false;$('#largePhoto').hidden=true;};
   document.addEventListener('keydown',e=>{
-    if(e.target.matches('input,textarea,select,video')||$('#exportDialog').open||$('#cacheDialog').open)return;
+    if(e.target.matches('input,textarea,select,video')||$('#exportDialog').open||$('#cacheDialog').open||$('#folderDialog').open)return;
     if(e.altKey&&e.target.dataset.reorder&&['ArrowLeft','ArrowRight'].includes(e.key)) {e.preventDefault();const id=e.target.dataset.reorder,p=currentPost(),i=p.photos.indexOf(id),to=p.photos[i+(e.key==='ArrowRight'?1:-1)];if(to){reorder(id,to);document.querySelector(`[data-reorder="${id}"]`)?.focus();}return;}
     if(!current||e.ctrlKey||e.metaKey||e.altKey)return;
     if(e.key==='Escape'){e.preventDefault();closeViewer();}
@@ -280,6 +290,34 @@ function bind() {
   $('#saveCacheLimit').onclick=()=>changeCache(false);
   $('#clearCache').onclick=()=>changeCache(true);
   $('#refreshLibrary').onclick=refreshLibrary;
+  $('#chooseFolder').onclick=()=>{$('#folderDialog').showModal();browseFolders(folderPath);};
+  $('#closeFolder').onclick=()=>$('#folderDialog').close();
+  $('#folderDialog').addEventListener('cancel',e=>{if($('#closeFolder').disabled)e.preventDefault();});
+  $('#folderDialog').addEventListener('close',hideFolderSuggestions);
+  $('#folderPath').oninput=()=>{
+    ++folderBrowseRequest;
+    $('#openFolder').disabled=false;
+    hideFolderSuggestions();
+    // Keep the previous results visible until the new response is ready.
+    $('#folderUp').disabled=false;
+    folderSuggestionTimer=setTimeout(suggestFolders,300);
+  };
+  $('#folderPath').onkeydown=e=>{
+    if(e.key==='Escape'&&folderSuggestions.length){e.preventDefault();e.stopPropagation();hideFolderSuggestions();return;}
+    if(!folderSuggestions.length)return;
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+      e.preventDefault();
+      folderSuggestionIndex=folderSuggestionIndex<0 ? (e.key==='ArrowDown'?0:folderSuggestions.length-1) : (folderSuggestionIndex+(e.key==='ArrowDown'?1:-1)+folderSuggestions.length)%folderSuggestions.length;
+      renderFolderSuggestions();
+    } else if(e.key==='Enter'&&folderSuggestionIndex>=0){e.preventDefault();selectFolderSuggestion(folderSuggestionIndex);}
+
+  };
+  $('#folderEntries').onmousedown=e=>{if(e.target.closest('[data-suggestion]'))e.preventDefault();};
+  $('#folderForm').onsubmit=e=>{e.preventDefault();browseFolders($('#folderPath').value);};
+  $('#folderUp').onclick=()=>browseFolders($('#folderPath').value,true);
+  $('#folderEntries').onclick=e=>{const suggestion=e.target.closest('[data-suggestion]');if(suggestion){selectFolderSuggestion(Number(suggestion.dataset.suggestion));return;}const b=e.target.closest('[data-path]');if(b)browseFolders(b.dataset.path);};
+  $('#folderShortcuts').onclick=e=>{const b=e.target.closest('[data-path]');if(b)browseFolders(b.dataset.path);};
+  $('#openFolder').onclick=switchFolder;
   $('#closeExport').onclick=()=>$('#exportDialog').close();
   $('#reveal').onclick=()=>api('/api/reveal',{id:exportId}).catch(e=>toast(e.message));
   window.addEventListener('beforeunload',e=>{if(dirty||saving){e.preventDefault();e.returnValue='';}});
@@ -385,12 +423,81 @@ async function refreshLibrary() {
   } catch(e) {toast(e.message);}
   finally {button.disabled=false;button.textContent='↻ Обновить библиотеку';}
 }
+function hideFolderSuggestions() {
+  clearTimeout(folderSuggestionTimer);++folderSuggestionRequest;
+  folderSuggestions=[];folderSuggestionIndex=-1;
+  for(const b of document.querySelectorAll('#folderEntries [data-suggestion]')){delete b.dataset.suggestion;b.removeAttribute('aria-selected');}
+  $('#folderPath').setAttribute('aria-expanded','false');
+  $('#folderPath').removeAttribute('aria-activedescendant');
+}
+function renderFolderSuggestions() {
+  $('#folderEntries').innerHTML=folderSuggestions.map((entry,i)=>`<button type="button" role="option" tabindex="-1" id="folderSuggestion${i}" aria-selected="${i===folderSuggestionIndex}" data-suggestion="${i}" data-path="${esc(entry.path)}">${esc(entry.name)}</button>`).join('');
+  const active=$('#folderSuggestion'+folderSuggestionIndex);
+  if(active){$('#folderPath').setAttribute('aria-activedescendant',active.id);active.scrollIntoView({block:'nearest'});}
+  else $('#folderPath').removeAttribute('aria-activedescendant');
+}
+async function suggestFolders() {
+  const request=++folderSuggestionRequest, path=$('#folderPath').value;
+  try {
+    const data=await api('/api/folder-suggestions',{path});
+    if(request!==folderSuggestionRequest||!$('#folderDialog').open||path!==$('#folderPath').value)return;
+    folderSuggestions=data.folders;folderSuggestionIndex=-1;
+    renderFolderSuggestions();
+    $('#folderPath').setAttribute('aria-expanded',String(Boolean(folderSuggestions.length)));
+    $('#folderMessage').textContent=!folderSuggestions.length?'Подходящих папок нет':data.more?'Показаны первые 100 папок. Уточните путь.':'';
+  } catch(e){
+    if(request!==folderSuggestionRequest)return;
+    $('#folderMessage').textContent=e.message;
+  }
+}
+function selectFolderSuggestion(index) {
+  const path=folderSuggestions[index]?.path;
+  if(!path)return;
+  $('#folderPath').value=path;
+  hideFolderSuggestions();
+  browseFolders(path);
+  $('#folderPath').focus();
+}
+async function browseFolders(path, up=false) {
+  hideFolderSuggestions();
+  const request=++folderBrowseRequest;
+  $('#openFolder').disabled=true;
+  $('#folderMessage').textContent='Загружаем папки…';
+  try {
+    const data=await api('/api/folders',{path,up});
+    if(request!==folderBrowseRequest)return;
+    $('#folderPath').value=data.inputPath;
+    $('#folderUp').disabled=data.parent===data.path;
+    const buttons=entries=>entries.map(entry=>`<button type="button" data-path="${esc(entry.path)}">${esc(entry.name)}</button>`).join('');
+    $('#folderEntries').innerHTML=buttons(data.folders);
+    $('#folderShortcuts').innerHTML=buttons(data.shortcuts);
+    $('#folderMessage').textContent=data.folders.length?'':'Вложенных папок нет. Можно открыть эту папку.';
+    $('#openFolder').disabled=false;
+  } catch(e) {if(request===folderBrowseRequest)$('#folderMessage').textContent=e.message;}
+}
+async function switchFolder() {
+  hideFolderSuggestions();
+  const button=$('#openFolder');button.disabled=true;$('#closeFolder').disabled=true;
+  $('#folderControls').disabled=true;
+  previews.paused=true;largePreviews.paused=true;
+  try {
+    await flush();
+    $('#folderMessage').textContent='Открываем библиотеку…';
+    await api('/api/folder',{path:$('#folderPath').value});
+    location.reload();
+  } catch(e) {
+    $('#folderMessage').textContent=e.message;
+    button.disabled=false;$('#closeFolder').disabled=false;$('#folderControls').disabled=false;
+    previews.paused=false;previews.schedule();largePreviews.paused=false;largePreviews.pump();
+  }
+}
 async function init() {
   try {
-    const data=await api('/api/library');photos=data.photos;byId=new Map(photos.map(p=>[p.id,p]));state=data.state;token=data.token;
-    $('#folder').textContent=data.folder;
+    const data=await api('/api/library');photos=data.photos;byId=new Map(photos.map(p=>[p.id,p]));state=data.state;token=data.token;project=data.project;folderPath=data.folderPath;
+    $('#folder').textContent=data.folder;$('#folder').title=folderPath;
     updateDays();
-    bind();if(!state.posts.length)newPost();else{if(!currentPost()){state.active=state.posts[0].id;changed();}render();$('#saveStatus').textContent='✓ Сохранено на диске';}
+    const cleaned=removeEmptyPosts();
+    bind();if(!state.posts.length)newPost();else{if(!currentPost()){state.active=state.posts[0].id;changed();}render();if(cleaned)changed();else if(!dirty)$('#saveStatus').textContent='✓ Сохранено на диске';}
   } catch(e){$('main').innerHTML=`<p class="fatal">Не удалось открыть библиотеку: ${esc(e.message)}<br>Перезапустите приложение и обновите страницу.</p>`;}
 }
 init();

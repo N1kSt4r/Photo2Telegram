@@ -71,9 +71,7 @@ class LauncherTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='Launcher test ') as temp:
             help_result = subprocess.run([*command, '--help'], cwd=temp, capture_output=True, timeout=15)
             self.assertEqual(help_result.returncode, 0, help_result.stderr)
-            self.assertIn(b'Usage:', help_result.stdout)
-            empty_result = subprocess.run(command, cwd=temp, capture_output=True, timeout=15)
-            self.assertEqual(empty_result.returncode, 1, (empty_result.stdout, empty_result.stderr))
+            self.assertIn(b'usage:', help_result.stdout.lower())
             bad_result = subprocess.run([*command, str(Path(temp) / 'missing photos')], cwd=temp,
                                         capture_output=True, timeout=15)
             self.assertEqual(bad_result.returncode, 1, (bad_result.stdout, bad_result.stderr))
@@ -100,9 +98,9 @@ class ServerProcessTest(unittest.TestCase):
                          'sys.argv = sys.argv[1:]; '
                          'sys.path.insert(0, os.path.dirname(sys.argv[0])); '
                          'runpy.run_path(sys.argv[0], run_name="__main__")')
-            command = [sys.executable, '-u', '-X', 'utf8', '-c', bootstrap, str(ROOT / 'src/server.py'), '--root', str(media), '--data', str(data), '--port', '0']
+            command = [sys.executable, '-u', '-X', 'utf8', '-c', bootstrap, str(ROOT / 'src/server.py'), '--data', str(data), '--port', '0']
             with (root / 'server.log').open('w', encoding='utf-8') as log:
-                process = subprocess.Popen(command, stdout=log, stderr=log)
+                process = subprocess.Popen(command, cwd=media, stdout=log, stderr=log)
                 try:
                     deadline = time.monotonic() + 20
                     while not (data / 'runtime.json').exists() and process.poll() is None and time.monotonic() < deadline:
@@ -116,7 +114,7 @@ class ServerProcessTest(unittest.TestCase):
                     self.assertEqual(library['photos'][0]['name'], 'Кадр.jpg')
                     with urllib.request.urlopen(url + '/photo/' + library['photos'][0]['id'], timeout=5) as response:
                         self.assertEqual(response.read()[:2], b'\xff\xd8')
-                    result = subprocess.run(command, capture_output=True, timeout=10)
+                    result = subprocess.run(command, cwd=media, capture_output=True, timeout=10)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn(url.encode(), result.stdout)
                 finally:
