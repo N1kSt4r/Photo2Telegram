@@ -39,7 +39,7 @@ class LibraryTest(unittest.TestCase):
             self.library.save(too_many)
         state['posts'][0]['caption'] = 'Новая подпись'
         self.library.save(state)
-        self.assertEqual(json.loads((self.data / 'project.backup.json').read_text())['revision'], 1)
+        self.assertEqual(json.loads((self.data / 'project.backup.json').read_text(encoding='utf-8'))['revision'], 1)
 
     def test_export_original_bytes_order_caption(self):
         state = self.project()
@@ -51,14 +51,14 @@ class LibraryTest(unittest.TestCase):
             time.sleep(.05)
         self.assertEqual(job['status'], 'done', job)
         path = Path(job['path'])
-        manifest = json.loads((path / 'Порядок постов.json').read_text())
+        manifest = json.loads((path / 'Порядок постов.json').read_text(encoding='utf-8'))
         folder = path / manifest[0]['folder']
         for i, name in enumerate(manifest[0]['files']):
             src = self.library.files[state['posts'][0]['photos'][i]]
             self.assertEqual(hashlib.sha256(src.read_bytes()).digest(), hashlib.sha256((folder / name).read_bytes()).digest())
             self.assertEqual((folder / name).suffix, '.png')
             self.assertTrue(name.startswith(f'{i+1:02d} — '))
-        self.assertEqual((folder / 'Подпись.txt').read_text(), state['posts'][0]['caption'])
+        self.assertEqual((folder / 'Подпись.txt').read_text(encoding='utf-8'), state['posts'][0]['caption'])
         self.assertEqual(len(list(self.root.glob('*.png'))), 12)
 
     def test_video_in_timeline_and_mixed_export(self):
@@ -120,7 +120,7 @@ class LibraryTest(unittest.TestCase):
         self.assertEqual(len(list(output.glob('*/*.MOV'))), 3)
         captions = list(output.glob('*/Подпись.txt'))
         self.assertEqual(len(captions), 1)
-        self.assertEqual(captions[0].read_text(), 'Текст')
+        self.assertEqual(captions[0].read_text(encoding='utf-8'), 'Текст')
 
     def test_supported_image_fixtures(self):
         for n, name in enumerate(['02-blue.jpg', '04-pattern.heic']):

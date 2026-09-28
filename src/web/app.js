@@ -4,7 +4,7 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 let photos = [], byId, state, token, tab = 'photos', current = null, viewerIds = [], visible = [];
 let dirty = false, saving = null, saveTimer, toastTimer, blocked = false, dragId = null, exportId;
 const currentPost = () => state.posts.find(p => p.id === state.active);
-const photoURL = (id, large=false) => `/photo/${id}${large ? '?size=large' : ''}`;
+const photoURL = (id, large=false) => `/photo/${id}?v=2${large ? '&size=large' : ''}`;
 function durationLabel(seconds) {
   if(!Number.isFinite(seconds)) return 'Видео';
   const n=Math.max(0,Math.round(seconds)), h=Math.floor(n/3600), m=Math.floor(n/60)%60, sec=String(n%60).padStart(2,'0');

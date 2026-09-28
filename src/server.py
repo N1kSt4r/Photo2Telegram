@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Local photo editor. Python standard library + macOS sips; no uploads."""
+"""Local photo editor. Pillow + pillow-heif; no uploads."""
 import argparse
-import fcntl
 import hashlib
+import io
 import json
 import math
 import os
@@ -10,6 +10,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -18,6 +19,12 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+
+from PIL import Image, ImageCms, ImageOps
+from pillow_heif import register_heif_opener
+from filelock import FileLock, Timeout
+
+register_heif_opener()
 
 APP = Path(__file__).resolve().parent
 VIDEO_EXTENSIONS = {'.mov', '.mp4', '.m4v', '.webm'}
@@ -31,6 +38,52 @@ def atomic_json(path, value):
         f.flush()
         os.fsync(f.fileno())
     temp.replace(path)
+
+
+def open_local(path):
+    path = str(Path(path).resolve())
+    if sys.platform == 'win32':
+        os.startfile(path)
+    else:
+        subprocess.Popen(['open' if sys.platform == 'darwin' else 'xdg-open', path])
+
+
+def image_date(path):
+    try:
+        with Image.open(path) as image:
+            exif = image.getexif()
+            details = exif.get_ifd(34665) if 34665 in exif else {}
+            for value in (details.get(36867), exif.get(36867), details.get(36868), exif.get(306)):
+                if isinstance(value, bytes):
+                    value = value.decode('ascii', errors='ignore')
+                if isinstance(value, str):
+                    try:
+                        return datetime.strptime(value.strip(' \x00'), '%Y:%m:%d %H:%M:%S').isoformat()
+                    except ValueError:
+                        continue
+    except (OSError, ValueError, SyntaxError):
+        pass
+    return None
+
+
+def image_preview(source, target, size):
+    with Image.open(source) as original:
+        profile = original.info.get('icc_profile')
+        original.thumbnail((size, size), Image.Resampling.LANCZOS)
+        image = ImageOps.exif_transpose(original)
+        if 'A' in image.getbands() or 'transparency' in image.info:
+            rgba = image.convert('RGBA')
+            background = Image.new('RGBA', rgba.size, 'white')
+            image = Image.alpha_composite(background, rgba).convert('RGB')
+        if profile:
+            try:
+                image = ImageCms.profileToProfile(image, ImageCms.ImageCmsProfile(io.BytesIO(profile)),
+                                                  ImageCms.createProfile('sRGB'), outputMode='RGB')
+            except (OSError, ValueError, ImageCms.PyCMSError):
+                image = image.convert('RGB')
+        else:
+            image = image.convert('RGB')
+        image.save(target, 'JPEG', quality=85, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes())
 
 
 class Library:
@@ -61,10 +114,9 @@ class Library:
                 date = datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec='seconds')
                 source = 'file'
             else:
-                result = subprocess.run(['sips', '-g', 'creation', str(p)], capture_output=True, text=True)
-                found = re.search(r'creation: (\d{4}):(\d{2}):(\d{2}) (\d{2}:\d{2}:\d{2})', result.stdout)
-                date = f'{found[1]}-{found[2]}-{found[3]}T{found[4]}' if found else datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec='seconds')
-                source = 'metadata' if found else 'file'
+                metadata_date = image_date(p)
+                date = metadata_date or datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec='seconds')
+                source = 'metadata' if metadata_date else 'file'
             self.photos.append(dict(id=ident, name=p.name, date=date, dateSource=source, kind='video' if p.suffix.lower() in VIDEO_EXTENSIONS else 'photo'))
             self.files[ident] = p
             if p.suffix.lower() in VIDEO_EXTENSIONS:
@@ -72,7 +124,7 @@ class Library:
         self.photos.sort(key=lambda p: (p['date'], p['name']))
         self.state = dict(revision=0, hidden=[], posts=[], active=None)
         if self.state_path.exists():
-            self.state = json.loads(self.state_path.read_text())
+            self.state = json.loads(self.state_path.read_text(encoding='utf-8'))
             self.validate(self.state)
 
     def validate(self, value):
@@ -116,7 +168,7 @@ class Library:
         cache = self.cache / f'{ident}-{path.stat().st_mtime_ns}-{path.stat().st_size}-duration.json'
         try:
             if cache.exists():
-                return json.loads(cache.read_text())['duration']
+                return json.loads(cache.read_text(encoding='utf-8'))['duration']
             if not self.ffprobe:
                 return None
             result = subprocess.run([self.ffprobe, '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', str(path)], capture_output=True, text=True, timeout=15, check=True)
@@ -131,7 +183,7 @@ class Library:
     def preview(self, ident, size):
         p = self.files[ident]
         fingerprint = f'{p.stat().st_mtime_ns}-{p.stat().st_size}'
-        target = self.cache / f'{ident}-{fingerprint}-{size}.jpg'
+        target = self.cache / f'{ident}-{fingerprint}-{size}-v2.jpg'
         with self.lock:
             lock = self.image_locks.setdefault((ident, size), threading.Lock())
         with lock:
@@ -145,9 +197,12 @@ class Library:
                         seek = min(1, duration / 3) if duration else 0
                         command = [self.ffmpeg, '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-threads', '1', '-ss', str(seek), '-i', str(p), '-map', '0:v:0', '-frames:v', '1', '-vf', f'scale={size}:{size}:force_original_aspect_ratio=decrease', '-q:v', '3', '-threads', '1', str(temp)]
                         result = subprocess.run(command, capture_output=True, timeout=90)
+                        if result.returncode:
+                            temp.unlink(missing_ok=True)
+                            raise RuntimeError('Не удалось создать превью видео')
                     else:
-                        result = subprocess.run(['sips', '-s', 'format', 'jpeg', '-s', 'formatOptions', '85', '-Z', str(size), str(p), '--out', str(temp)], capture_output=True, timeout=90)
-                    if result.returncode or not temp.exists() or temp.stat().st_size == 0:
+                        image_preview(p, temp, size)
+                    if not temp.exists() or temp.stat().st_size == 0:
                         temp.unlink(missing_ok=True)
                         raise RuntimeError('Не удалось создать превью')
                     temp.replace(target)
@@ -309,13 +364,13 @@ def handler_for(library):
                     path = library.files.get(data.get('id'))
                     if not path or path.suffix.lower() not in VIDEO_EXTENSIONS:
                         raise ValueError('Видео не найдено')
-                    subprocess.Popen(['open', str(path)])
+                    open_local(path)
                     return self.respond(200, {'ok': True})
                 if self.path == '/api/reveal':
                     job = library.jobs.get(data.get('id'))
                     if not job or job['status'] != 'done':
                         raise ValueError('Экспорт ещё не готов')
-                    subprocess.Popen(['open', job['path']])
+                    open_local(job['path'])
                     return self.respond(200, {'ok': True})
                 self.respond(404, {'error': 'Not found'})
             except (ValueError, TypeError) as e:
@@ -333,40 +388,45 @@ def main():
     parser.add_argument('--data', type=Path, default=APP.parent / 'data')
     args = parser.parse_args()
     args.data.mkdir(parents=True, exist_ok=True)
-    instance_lock = (args.data / 'instance.lock').open('a+')
+    if not args.root.is_dir():
+        parser.error('Папка с фото и видео не найдена')
+    instance_lock = FileLock(args.data / 'instance.lock')
     try:
-        fcntl.flock(instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        instance_lock.acquire(timeout=0)
+    except Timeout:
         runtime = args.data / 'runtime.json'
         if runtime.exists():
-            url = json.loads(runtime.read_text())['url']
+            url = json.loads(runtime.read_text(encoding='utf-8'))['url']
             print(f'Приложение уже открыто: {url}')
             if args.open:
                 webbrowser.open(url)
         return
-    library = Library(args.root, args.data)
-    server = None
-    for port in range(args.port, args.port + 20):
-        try:
-            server = ThreadingHTTPServer(('127.0.0.1', port), handler_for(library))
-            break
-        except PermissionError:
-            raise SystemExit('Нет разрешения открыть локальный сервер')
-        except OSError:
-            continue
-    if server is None:
-        raise SystemExit('Не удалось найти свободный порт')
-    url = f'http://127.0.0.1:{server.server_port}'
-    atomic_json(args.data / 'runtime.json', {'url': url})
-    print(f'Photo2Telegram: {url}\nНайдено фото и видео: {len(library.photos)}\nДля остановки нажмите Ctrl+C.', flush=True)
-    if args.open:
-        webbrowser.open(url)
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
+        library = Library(args.root, args.data)
+        server = None
+        for port in range(args.port, args.port + 20):
+            try:
+                server = ThreadingHTTPServer(('127.0.0.1', port), handler_for(library))
+                break
+            except PermissionError:
+                raise SystemExit('Нет разрешения открыть локальный сервер')
+            except OSError:
+                continue
+        if server is None:
+            raise SystemExit('Не удалось найти свободный порт')
+        url = f'http://127.0.0.1:{server.server_port}'
+        atomic_json(args.data / 'runtime.json', {'url': url})
+        print(f'Photo2Telegram: {url}\nНайдено фото и видео: {len(library.photos)}\nДля остановки нажмите Ctrl+C.', flush=True)
+        if args.open:
+            webbrowser.open(url)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
     finally:
-        server.server_close()
+        instance_lock.release()
 
 
 if __name__ == '__main__':
