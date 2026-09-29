@@ -21,7 +21,7 @@ img.preview-pending{opacity:0}.preview-loading{background:linear-gradient(110deg
 
 #folderEntries{height:min(30vh,240px);max-height:none;flex-shrink:0;scrollbar-gutter:stable}#folderEntries button{flex-shrink:0}#folderEntries button:hover,#folderEntries button[aria-selected="true"]{background:var(--pale);color:var(--green)}#folderMessage{height:3.4em;overflow:auto;margin:12px 0}#folderDialog{max-height:calc(100dvh - 32px);overflow:auto}
 
-#telegramSettings{margin-top:14px}#telegramDialog{width:720px;max-height:90vh;overflow:auto}#telegramConfig{border:0;padding:0;margin:0;display:grid;gap:12px}#telegramConfig select{display:block;width:100%;margin-top:8px;padding:9px;border:1px solid var(--line);border-radius:7px;background:white}.telegram-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}#telegramReview{height:64vh;min-height:400px;overflow:auto}.telegram-post{border:1px solid var(--line);border-radius:8px;padding:12px;margin:8px 0;font-size:12px}.telegram-post p{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0}.telegram-post small{color:var(--muted)}#telegramNotice{min-height:1.5em;overflow-wrap:anywhere}#telegramDestination{font-weight:600}#telegramConfig small{display:block;margin-top:6px}
+#telegramDialog{width:720px;max-height:90vh;overflow:auto}#telegramConfig{border:0;padding:0;margin:0;display:grid;gap:12px}#telegramConfig select{display:block;width:100%;margin-top:8px;padding:9px;border:1px solid var(--line);border-radius:7px;background:white}.telegram-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}#telegramReview{height:64vh;min-height:400px;overflow:auto}.telegram-post{border:1px solid var(--line);border-radius:8px;padding:12px;margin:8px 0;font-size:12px}.telegram-post p{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0}.telegram-post small{color:var(--muted)}#telegramNotice{min-height:1.5em;overflow-wrap:anywhere}#telegramDestination{font-weight:600}#telegramConfig small{display:block;margin-top:6px}
 
 .telegram-media-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
 .telegram-media{position:relative;aspect-ratio:1;margin:0;overflow:hidden;border-radius:8px;background:#eee}
@@ -65,3 +65,5 @@ button.telegram-media-open{border:0;padding:0;border-radius:0;background:transpa
 #telegramApiSave{justify-self:start;max-width:100%;line-height:1.4;text-align:left}
 
 .telegram-selection-controls{display:flex;align-items:center;gap:12px 24px;flex-wrap:wrap;margin:12px 0}#telegramCounts{margin:6px 0 12px;font-variant-numeric:tabular-nums}#telegramProgress{margin-bottom:0}
+
+.export-method{margin:16px 0}.export-method select{display:block;width:100%;margin-top:8px;padding:9px;border:1px solid var(--line);border-radius:7px;background:white}#exportResult{margin-top:20px}#directoryExport p{overflow-wrap:anywhere}

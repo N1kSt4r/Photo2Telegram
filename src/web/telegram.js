@@ -22,8 +22,21 @@ function telegramError(error){
   $('#telegramNotice').scrollIntoView({block:'nearest'});
 }
 function telegramModeChanged(){
+  const directories=$('#telegramMode').value==='directories';
+  $('#directoryExport').hidden=!directories;
+  $('#telegramBody').hidden=directories;
   $('#telegramEndpointLabel').hidden=$('#telegramMode').value!=='local';
   $('#telegramContainer').hidden=$('#telegramMode').value!=='local';
+}
+function rememberExportMethod(){
+  try{localStorage.setItem('photo2telegram:export:'+project,$('#telegramMode').value);}catch{}
+}
+function openExportDialog(){
+  let method='directories';
+  try{method=localStorage.getItem('photo2telegram:export:'+project)||method;}catch{}
+  $('#telegramMode').value=['directories','cloud','local'].includes(method)?method:'directories';
+  telegramSettingsLoaded=false;
+  telegramModeChanged();$('#telegramDialog').showModal();refreshTelegram();
 }
 function telegramConfig(){return {mode:$('#telegramMode').value,endpoint:$('#telegramEndpoint').value,
   token:$('#telegramToken').value,channel:$('#telegramChannel').value,silent:$('#telegramSilent').checked};}
@@ -68,12 +81,14 @@ function renderTelegram(data){
   telegramLastData=data;
   if(!telegramSettingsLoaded){
     const settings=data.settings;
-    $('#telegramMode').value=settings.mode||'cloud';$('#telegramEndpoint').value=settings.endpoint&&settings.mode==='local'?settings.endpoint:'http://127.0.0.1:8081';
+    if(data.busy)$('#telegramMode').value=data.job?.mode||settings.mode||'cloud';
+    $('#telegramEndpoint').value=settings.endpoint&&settings.mode==='local'?settings.endpoint:'http://127.0.0.1:8081';
     $('#telegramChannel').value=settings.channel||'';$('#telegramSilent').checked=Boolean(settings.silent);
     $('#telegramToken').value='';$('#telegramToken').placeholder=settings.has_token?'Токен сохранён локально; пустое поле оставляет его прежним':'Токен от @BotFather';
     telegramModeChanged();telegramSettingsLoaded=true;
   }
   const job=data.job,busy=data.busy??Boolean(job&&['preparing','cancelling','ready','sending'].includes(job.status));
+  $('#telegramMode').disabled=Boolean(busy||telegramActionBusy||exportRunning);
   telegramJobId=job?.id;
   $('#telegramConfig').disabled=Boolean(busy);
   $('#telegramPrepareCurrent').disabled=Boolean(busy);$('#telegramPrepareAll').disabled=Boolean(busy);
@@ -141,19 +156,19 @@ async function refreshTelegram(){
 async function telegramAction(action){
   if(telegramActionBusy)return;
   telegramActionBusy=true;
+  $('#telegramMode').disabled=true;
   clearTimeout(telegramTimer);
   $('#telegramNotice').textContent='';
   const buttons=[...document.querySelectorAll('#telegramDialog button:not(#closeTelegram)')];
   buttons.forEach(b=>b.disabled=true);
   try{await action();}
   catch(e){telegramError(e);}
-  finally{telegramActionBusy=false;buttons.forEach(b=>b.disabled=false);if(telegramContainerData)renderTelegramContainer(telegramContainerData);await refreshTelegram();}
+  finally{telegramActionBusy=false;buttons.forEach(b=>b.disabled=false);$('#telegramMode').disabled=Boolean(telegramLastData?.busy||exportRunning);if(telegramContainerData)renderTelegramContainer(telegramContainerData);await refreshTelegram();}
 }
-$('#telegramSettings').onclick=()=>{telegramSettingsLoaded=false;$('#telegramDialog').showModal();refreshTelegram();};
 $('#telegramReload').onclick=()=>location.reload();
 $('#closeTelegram').onclick=()=>$('#telegramDialog').close();
 $('#telegramDialog').addEventListener('close',()=>clearTimeout(telegramTimer));
-$('#telegramMode').onchange=()=>{telegramModeChanged();refreshTelegramContainer();};
+$('#telegramMode').onchange=()=>{rememberExportMethod();telegramModeChanged();refreshTelegramContainer();};
 $('#telegramSave').onclick=()=>telegramAction(async()=>{await saveTelegram();$('#telegramNotice').textContent='Настройки сохранены локально.';});
 $('#telegramCheck').onclick=()=>telegramAction(async()=>{
   await saveTelegram();$('#telegramNotice').textContent='Проверяем подключение…';

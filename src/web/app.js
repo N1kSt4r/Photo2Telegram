@@ -267,7 +267,7 @@ function bind() {
   $('#largeVideo').onerror=()=>{if(!$('#largeVideo').hasAttribute('src'))return;$('#videoError').hidden=false;$('#largeVideo').hidden=true;};
   $('#largePhoto').onerror=()=>{$('#largeError').hidden=false;$('#largePhoto').hidden=true;};
   document.addEventListener('keydown',e=>{
-    if(e.target.matches('input,textarea,select,video')||$('#exportDialog').open||$('#cacheDialog').open||$('#folderDialog').open||$('#telegramDialog').open)return;
+    if(e.target.matches('input,textarea,select,video')||$('#cacheDialog').open||$('#folderDialog').open||$('#telegramDialog').open)return;
     if(e.altKey&&e.target.dataset.reorder&&['ArrowLeft','ArrowRight'].includes(e.key)) {e.preventDefault();const id=e.target.dataset.reorder,p=currentPost(),i=p.photos.indexOf(id),to=p.photos[i+(e.key==='ArrowRight'?1:-1)];if(to){reorder(id,to);document.querySelector(`[data-reorder="${id}"]`)?.focus();}return;}
     if(!current||e.ctrlKey||e.metaKey||e.altKey)return;
     if(e.key==='Escape'){e.preventDefault();closeViewer();}
@@ -283,7 +283,8 @@ function bind() {
   sel.addEventListener('drop',e=>{e.preventDefault();const mini=e.target.closest('[data-mini]');if(mini&&dragId)reorder(dragId,mini.dataset.mini);dragId=null;});
   sel.addEventListener('dragend',()=>{dragId=null;document.querySelectorAll('.drag-over').forEach(x=>x.classList.remove('drag-over'));});
   $('#saveStatus').onclick=()=>flush().catch(()=>{});
-  $('#export').onclick=exportPosts;
+  $('#export').onclick=openExportDialog;
+  $('#exportDirectories').onclick=exportPosts;
   $('#cacheSettings').onclick=openCache;
   $('#closeCache').onclick=()=>$('#cacheDialog').close();
   $('#cacheDialog').addEventListener('close',()=>clearTimeout(cacheStatsTimer));
@@ -318,7 +319,6 @@ function bind() {
   $('#folderEntries').onclick=e=>{const suggestion=e.target.closest('[data-suggestion]');if(suggestion){selectFolderSuggestion(Number(suggestion.dataset.suggestion));return;}const b=e.target.closest('[data-path]');if(b)browseFolders(b.dataset.path);};
   $('#folderShortcuts').onclick=e=>{const b=e.target.closest('[data-path]');if(b)browseFolders(b.dataset.path);};
   $('#openFolder').onclick=switchFolder;
-  $('#closeExport').onclick=()=>$('#exportDialog').close();
   $('#reveal').onclick=()=>api('/api/reveal',{id:exportId}).catch(e=>toast(e.message));
   window.addEventListener('beforeunload',e=>{if(dirty||saving){e.preventDefault();e.returnValue='';}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden&&dirty)flush().catch(()=>{});});
@@ -381,13 +381,15 @@ async function changeCache(clear) {
     $('#clearCache').disabled=false;$('#saveCacheLimit').disabled=false;$('#cacheLimit').disabled=false;
   }
 }
+let exportRunning=false;
 async function exportPosts() {
+  if(exportRunning)return;
   if(!state.posts.some(p=>!emptyPost(p)))return toast('Сначала добавьте фото, видео или текст в пост');
   if(state.posts.some(p=>p.caption.length>(p.photos.length?1024:4096)))return toast('Сократите подписи до 1024 символов, текстовые посты — до 4096');
-  $('#export').disabled=true;
+  exportRunning=true;$('#exportDirectories').disabled=true;$('#telegramMode').disabled=true;
   try {
     await flush();
-    $('#exportDialog').showModal();$('#exportTitle').textContent='Собираем папки…';$('#exportDescription').textContent='Сохраняем посты по порядку: оригинальные файлы и текст.';$('#exportPath').textContent='';$('#reveal').hidden=true;$('#exportProgress').value=0;
+    $('#exportResult').hidden=false;$('#exportTitle').textContent='Собираем папки…';$('#exportDescription').textContent='Сохраняем посты по порядку: оригинальные файлы и текст.';$('#exportPath').textContent='';$('#reveal').hidden=true;$('#exportProgress').value=0;
     const result=await api('/api/export',{});exportId=result.id;
     for(;;) {
       const job=await api('/api/job/'+exportId);$('#exportProgress').max=job.total;$('#exportProgress').value=job.done;
@@ -396,8 +398,8 @@ async function exportPosts() {
       if(job.status==='done') {$('#exportTitle').textContent='Посты готовы к отправке';$('#exportDescription').textContent='В папках — оригинальные фото и видео с номерами и непустые подписи. Текстовые посты содержат только «Подпись.txt». Проверьте порядок кадров при загрузке в Telegram.';$('#exportPath').textContent=job.path;$('#reveal').hidden=false;break;}
       await new Promise(r=>setTimeout(r,500));
     }
-  } catch(e) {toast(e.message);if($('#exportDialog').open){$('#exportTitle').textContent='Экспорт не завершён';$('#exportDescription').textContent=e.message;}}
-  finally {$('#export').disabled=false;}
+  } catch(e) {toast(e.message);if($('#telegramDialog').open){$('#exportResult').hidden=false;$('#exportTitle').textContent='Экспорт не завершён';$('#exportDescription').textContent=e.message;}}
+  finally {exportRunning=false;$('#exportDirectories').disabled=false;$('#telegramMode').disabled=Boolean(telegramLastData?.busy||telegramActionBusy);}
 }
 function updateDays() {
   const selected=$('#day').value;

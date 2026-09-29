@@ -5,16 +5,17 @@ const path=require('node:path');
 const vm=require('node:vm');
 
 function setup(){
-  const nodes=new Map(), requests=[];
+  const nodes=new Map(), requests=[], storage=new Map();
   const node=selector=>{
     if(!nodes.has(selector))nodes.set(selector,{
       value:'',checked:false,dataset:{},addEventListener(){},querySelectorAll(){return [];},
-      setAttribute(){},scrollIntoView(){},replaceChildren(content){this.markup=content.markup;},
+      setAttribute(){},scrollIntoView(){},replaceChildren(content){this.markup=content.markup;},showModal(){this.open=true;},
     });
     return nodes.get(selector);
   };
   const context=vm.createContext({
-    $:node,project:'test',byId:new Map(),token:'test-token',
+    $:node,project:'test',byId:new Map(),token:'test-token',exportRunning:false,
+    localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},
     esc:String,formatBytes:String,clearTimeout(){},setTimeout(){},
     flush:async()=>{},
     document:{querySelectorAll:()=>[],createElement:()=>({
@@ -25,6 +26,7 @@ function setup(){
   context.request=async(url,data)=>{requests.push({url,data});return {};};
   vm.runInContext('telegramAPI=request',context);
   const settings={mode:'cloud',channel:'@saved_channel',silent:false,has_token:true};
+  node('#telegramMode').value='cloud';
   const post={id:'one',title:'One',caption:'',status:'ready',files:[]};
   const render=(overrides={})=>{
     context.data={settings,busy:false,job:{id:'queue',status:'ready',channel_status:'ready',items:[{...post,...overrides}],message:''}};
@@ -70,4 +72,29 @@ test('unknown results show both manual resolution controls',()=>{
   const markup=app.node('#telegramReview').markup;
   assert.match(markup,/data-telegram-resolve="sent"/);
   assert.match(markup,/data-telegram-resolve="retry"/);
+});
+
+test('export defaults to directories and remembers the choice per library',()=>{
+  const app=setup();app.run('refreshTelegram=()=>{};refreshTelegramContainer=()=>{}');
+  app.run('openExportDialog()');
+  assert.equal(app.node('#telegramMode').value,'directories');
+  assert.equal(app.node('#telegramBody').hidden,true);
+  assert.equal(app.node('#directoryExport').hidden,false);
+  app.node('#telegramMode').value='local';app.node('#telegramMode').onchange();
+  assert.equal(app.node('#telegramBody').hidden,false);
+  assert.equal(app.node('#directoryExport').hidden,true);
+  assert.equal(app.node('#telegramContainer').hidden,false);
+  app.run('openExportDialog()');assert.equal(app.node('#telegramMode').value,'local');
+  app.run("project='another';openExportDialog()");assert.equal(app.node('#telegramMode').value,'directories');
+  app.run("project='test';openExportDialog()");assert.equal(app.node('#telegramMode').value,'local');
+  app.node('#telegramMode').value='cloud';app.node('#telegramMode').onchange();
+  assert.equal(app.node('#telegramContainer').hidden,true);
+  assert.equal(app.node('#telegramEndpointLabel').hidden,true);
+});
+
+test('loading saved bot settings does not replace the chosen export method',()=>{
+  const app=setup();app.run('refreshTelegram=()=>{};openExportDialog()');
+  app.render();
+  assert.equal(app.node('#telegramMode').value,'directories');
+  assert.equal(app.node('#telegramBody').hidden,true);
 });
