@@ -1,3 +1,4 @@
+import os
 import subprocess
 import tempfile
 import unittest
@@ -17,14 +18,18 @@ class ContainerTest(unittest.TestCase):
         return subprocess.CompletedProcess([], code, stdout, 'secret must not leak')
 
     def test_compose_fixed_project_and_service_no_shell(self):
-        with patch('src.bot_api_container.shutil.which', return_value='/docker/bin/docker'), patch('src.bot_api_container.subprocess.run', return_value=self.result()) as run:
+        docker_dir = self.controller.root / 'Docker Desktop' / 'bin'
+        executable = str(docker_dir / ('docker.exe' if os.name == 'nt' else 'docker'))
+        original_path = str(self.controller.root / 'other-bin')
+        with patch.dict(os.environ, {'PATH': original_path}), patch('src.bot_api_container.shutil.which', return_value=executable), patch('src.bot_api_container.subprocess.run', return_value=self.result()) as run:
             self.controller._compose('stop', 'telegram-bot-api')
             args, kwargs = run.call_args
             self.assertEqual(args[0][-2:], ['stop', 'telegram-bot-api'])
             self.assertIn(str(self.controller.root / 'compose.yaml'), args[0])
             self.assertIn('photo2telegram', args[0])
             self.assertFalse(kwargs.get('shell', False))
-            self.assertTrue(kwargs['env']['PATH'].startswith('/docker/bin'))
+            self.assertEqual(args[0][0], executable)
+            self.assertEqual(kwargs['env']['PATH'], str(docker_dir) + os.pathsep + original_path)
 
     def test_running_and_stopped_compose_formats(self):
         for output, status in [('[{"State":"running"}]', 'running'), ('{"State":"exited"}\n', 'stopped'), ('', 'stopped')]:
