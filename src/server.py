@@ -76,7 +76,7 @@ def image_date(path):
     return None
 
 
-def image_preview(source, target, size, *, quality=85, subsampling=-1):
+def save_jpeg(source, target, size, *, quality=85, subsampling=-1):
     with Image.open(source) as original:
         profile = original.info.get('icc_profile')
         if size is not None:
@@ -135,7 +135,7 @@ class Library:
                 self.catalog[ident] = dict(id=ident, name=f'Недоступный файл ({ident})',
                                           date='', dateSource='unknown', kind='photo')
         self.refresh()
-        self.publisher = Publisher(self, image_preview)
+        self.publisher = Publisher(self, save_jpeg)
         self.validate(self.state)
 
     def refresh(self):
@@ -284,7 +284,7 @@ class Library:
                                 temp.unlink(missing_ok=True)
                                 raise RuntimeError('Не удалось создать превью видео')
                         else:
-                            image_preview(p, temp, size)
+                            save_jpeg(p, temp, size)
                         if not temp.exists() or temp.stat().st_size == 0:
                             temp.unlink(missing_ok=True)
                             raise RuntimeError('Не удалось создать превью')

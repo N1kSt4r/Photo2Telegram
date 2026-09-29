@@ -165,8 +165,8 @@ class BotClient:
 
 
 class Publisher:
-    def __init__(self, library, image_preview):
-        self.library, self.image_preview = library, image_preview
+    def __init__(self, library, save_jpeg):
+        self.library, self.save_jpeg = library, save_jpeg
         self.lock = threading.RLock()
         self.settings_path = library.data / 'telegram-settings.json'
         self.journal_path = library.data / 'telegram-sent.json'
@@ -741,7 +741,7 @@ class Publisher:
         video = source.suffix.lower() in {'.mov', '.mp4', '.m4v', '.webm'}
         converted = True
         if not video:
-            self.image_preview(source, target, 2560, quality=95, subsampling=2)
+            self.save_jpeg(source, target, 2560, quality=95, subsampling=2)
             with Image.open(target) as image:
                 if max(image.size) / min(image.size) > 20:
                     raise ValueError(f'{source.name}: слишком вытянутое фото для Telegram (соотношение больше 20:1)')

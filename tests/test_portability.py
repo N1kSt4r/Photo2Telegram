@@ -13,7 +13,7 @@ import urllib.request
 
 from PIL import Image, ImageCms
 from filelock import FileLock
-from src.server import Library, LocalHTTPServer, image_preview, image_date, open_local
+from src.server import Library, LocalHTTPServer, save_jpeg, image_date, open_local
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,7 +29,7 @@ class ImageTest(unittest.TestCase):
             source = root / 'Снимок.jpg'
             image.save(source, exif=exif, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes())
             self.assertEqual(image_date(source), '2024-02-03T04:05:06')
-            image_preview(source, root / 'preview.jpg', 80)
+            save_jpeg(source, root / 'preview.jpg', 80)
             with Image.open(root / 'preview.jpg') as result:
                 self.assertEqual(result.size, (40, 80))
                 self.assertNotIn(274, result.getexif())
@@ -37,7 +37,7 @@ class ImageTest(unittest.TestCase):
                 self.assertTrue(result.info.get('icc_profile'))
             transparent = root / 'transparent.png'
             Image.new('RGBA', (10, 10), (255, 0, 0, 0)).save(transparent)
-            image_preview(transparent, root / 'white.jpg', 80)
+            save_jpeg(transparent, root / 'white.jpg', 80)
             with Image.open(root / 'white.jpg') as result:
                 self.assertEqual(result.getpixel((5, 5)), (255, 255, 255))
             library = Library(root, root / 'data')

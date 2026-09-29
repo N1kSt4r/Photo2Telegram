@@ -107,7 +107,7 @@ class PublisherTest(unittest.TestCase):
         self.assertFalse(self.publisher.outbox.exists())
         self.assertEqual(self.prepare()['skipped'], 1)
         self.assertEqual(len(self.fake.calls), 1)
-        restored = Publisher(self.library, self.publisher.image_preview)
+        restored = Publisher(self.library, self.publisher.save_jpeg)
         self.assertEqual(next(iter(restored.journal.values()))['status'], 'sent')
 
     def test_photo_preparation_parallel_across_posts_preserves_order(self):
@@ -211,7 +211,7 @@ class PublisherTest(unittest.TestCase):
         self.assertFalse(job['items'][0]['files'][0]['cached'])
         self.publisher.cancel()
         self.assertTrue(list(self.publisher.media_cache.glob('*.json')))
-        self.publisher = Publisher(self.library, self.publisher.image_preview)
+        self.publisher = Publisher(self.library, self.publisher.save_jpeg)
         self.publisher.client_factory = lambda _: self.fake
         with patch.object(self.publisher, '_prepare_media_file', side_effect=AssertionError('Cache was not reused')):
             job = self.prepare()
@@ -327,7 +327,7 @@ class PublisherTest(unittest.TestCase):
         self.assertEqual(initial['total'], 1)
         self.assertEqual(initial['items'][0]['status'], 'unprepared')
         self.prepare();self.publisher.cancel()
-        restored = Publisher(self.library, self.publisher.image_preview)
+        restored = Publisher(self.library, self.publisher.save_jpeg)
         with patch.object(restored, 'client_factory', side_effect=AssertionError('Must stay offline')):
             overview = restored.status()['job']
         self.assertEqual(overview['items'][0]['status'], 'cached')
@@ -336,7 +336,7 @@ class PublisherTest(unittest.TestCase):
         self.publisher.client_factory = lambda _: self.fake
         job = self.prepare()
         self.publisher.send(job['id']);self.wait()
-        restored = Publisher(self.library, self.publisher.image_preview)
+        restored = Publisher(self.library, self.publisher.save_jpeg)
         self.assertEqual(restored.status()['job']['items'][0]['status'], 'sent')
         self.assertTrue(restored.status()['job']['items'][0]['link'])
         key = next(iter(restored.journal))
@@ -381,7 +381,7 @@ class PublisherTest(unittest.TestCase):
             self.assertIsNone(self.publisher.prepared_file(invalid))
         self.publisher.cancel()
         self.assertIsNone(self.publisher.prepared_file(reference))
-        restored = Publisher(self.library, self.publisher.image_preview)
+        restored = Publisher(self.library, self.publisher.save_jpeg)
         cached_ref = restored.status()['job']['items'][0]['files'][0]['prepared_ref']
         self.assertIsNotNone(restored.prepared_file(cached_ref))
 
@@ -442,7 +442,7 @@ class PublisherTest(unittest.TestCase):
 
     def test_send_ready_after_restart_checks_channel_without_reconverting(self):
         self.prepare();self.publisher.cancel()
-        restored = Publisher(self.library, self.publisher.image_preview)
+        restored = Publisher(self.library, self.publisher.save_jpeg)
         restored.client_factory = lambda _: self.fake
         self.publisher = restored
         self.assertEqual(restored.status()['job']['items'][0]['status'], 'cached')
@@ -477,7 +477,7 @@ class PublisherTest(unittest.TestCase):
         photo = self.library.photos[0]['id']
         self.library.state['posts'] = [dict(id=str(i), title=str(i), caption=str(i), photos=[photo]) for i in range(3)]
         self.prepare();self.publisher.cancel()
-        self.publisher = Publisher(self.library, self.publisher.image_preview)
+        self.publisher = Publisher(self.library, self.publisher.save_jpeg)
         self.publisher.client_factory = lambda _: self.fake
         entered, release = threading.Event(), threading.Event()
         original = self.fake.call
@@ -574,7 +574,7 @@ class PublisherTest(unittest.TestCase):
 
     def test_interrupted_send_is_unknown_after_restart(self):
         self.publisher._record('key', dict(status='sending', post_id='one'))
-        restored = Publisher(self.library, self.publisher.image_preview)
+        restored = Publisher(self.library, self.publisher.save_jpeg)
         self.assertEqual(restored.journal['key']['status'], 'unknown')
 
     def test_known_rejection_cancel_and_validation(self):
@@ -692,7 +692,7 @@ class PublisherTest(unittest.TestCase):
             self.assertEqual(self.wait()['status'], 'error')
         self.assertEqual(len(self.fake.calls), 1)
         self.assertEqual(next(iter(self.publisher.journal.values()))['status'], 'unknown')
-        restored = Publisher(self.library, self.publisher.image_preview)
+        restored = Publisher(self.library, self.publisher.save_jpeg)
         self.assertEqual(next(iter(restored.journal.values()))['status'], 'unknown')
 
 
