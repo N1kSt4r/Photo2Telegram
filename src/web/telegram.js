@@ -21,12 +21,13 @@ function telegramError(error){
 }
 function telegramModeChanged(){
   $('#telegramEndpointLabel').hidden=$('#telegramMode').value!=='local';
+  $('#telegramContainer').hidden=$('#telegramMode').value!=='local';
 }
 function telegramConfig(){return {mode:$('#telegramMode').value,endpoint:$('#telegramEndpoint').value,
   token:$('#telegramToken').value,channel:$('#telegramChannel').value,silent:$('#telegramSilent').checked};}
 async function saveTelegram(){
   const data=await telegramAPI('/api/telegram/settings',telegramConfig());
-  $('#telegramToken').value='';$('#telegramToken').placeholder=data.has_token?'Токен сохранён; пустое поле оставляет его прежним':'Токен от @BotFather';
+  $('#telegramToken').value='';$('#telegramToken').placeholder=data.has_token?'Токен сохранён локально; пустое поле оставляет его прежним':'Токен от @BotFather';
   return data;
 }
 function shortTelegramError(file){
@@ -56,7 +57,7 @@ function renderTelegram(data){
     const settings=data.settings;
     $('#telegramMode').value=settings.mode||'cloud';$('#telegramEndpoint').value=settings.endpoint&&settings.mode==='local'?settings.endpoint:'http://127.0.0.1:8081';
     $('#telegramChannel').value=settings.channel||'';$('#telegramSilent').checked=Boolean(settings.silent);
-    $('#telegramToken').value='';$('#telegramToken').placeholder=settings.has_token?'Токен сохранён; пустое поле оставляет его прежним':'Токен от @BotFather';
+    $('#telegramToken').value='';$('#telegramToken').placeholder=settings.has_token?'Токен сохранён локально; пустое поле оставляет его прежним':'Токен от @BotFather';
     telegramModeChanged();telegramSettingsLoaded=true;
   }
   const job=data.job,busy=data.busy??Boolean(job&&['preparing','cancelling','ready','sending'].includes(job.status));
@@ -110,11 +111,12 @@ function renderTelegram(data){
     $('#telegramCancel').textContent=job.status==='cancelling'?'Останавливаем…':job.status==='sending'?'Остановить после текущего поста':'Остановить подготовку';
   }
 
+  if(telegramContainerData&&$('#telegramMode').value==='local')renderTelegramContainer(telegramContainerData);
 }
 async function refreshTelegram(){
   clearTimeout(telegramTimer);
   if(!$('#telegramDialog').open||telegramActionBusy)return;
-  try{const data=await telegramAPI('/api/telegram/status',{});if(!telegramActionBusy)renderTelegram(data);}
+  try{const data=await telegramAPI('/api/telegram/status',{});if(!telegramActionBusy){renderTelegram(data);await refreshTelegramContainer();}}
   catch(e){telegramError(e);$('#telegramConfig').disabled=false;$('#telegramPrepareCurrent').disabled=false;$('#telegramPrepareAll').disabled=false;}
   finally{if($('#telegramDialog').open)telegramTimer=setTimeout(refreshTelegram,1000);}
 }
@@ -127,13 +129,13 @@ async function telegramAction(action){
   buttons.forEach(b=>b.disabled=true);
   try{await action();}
   catch(e){telegramError(e);}
-  finally{telegramActionBusy=false;buttons.forEach(b=>b.disabled=false);await refreshTelegram();}
+  finally{telegramActionBusy=false;buttons.forEach(b=>b.disabled=false);if(telegramContainerData)renderTelegramContainer(telegramContainerData);await refreshTelegram();}
 }
 $('#telegramSettings').onclick=()=>{telegramSettingsLoaded=false;$('#telegramDialog').showModal();refreshTelegram();};
 $('#telegramReload').onclick=()=>location.reload();
 $('#closeTelegram').onclick=()=>$('#telegramDialog').close();
 $('#telegramDialog').addEventListener('close',()=>clearTimeout(telegramTimer));
-$('#telegramMode').onchange=telegramModeChanged;
+$('#telegramMode').onchange=()=>{telegramModeChanged();refreshTelegramContainer();};
 $('#telegramSave').onclick=()=>telegramAction(async()=>{await saveTelegram();$('#telegramNotice').textContent='Настройки сохранены локально.';});
 $('#telegramCheck').onclick=()=>telegramAction(async()=>{
   await saveTelegram();$('#telegramNotice').textContent='Проверяем подключение…';
@@ -216,3 +218,36 @@ $('#telegramOutputNext').onclick=()=>moveTelegramOutput(1);
 $('#telegramOutputClose').onclick=()=>$('#telegramOutput').close();
 $('#telegramOutput').addEventListener('close',()=>{++telegramOutputRequest;const video=$('#telegramOutputVideo');video.pause();video.removeAttribute('src');video.load();});
 $('#telegramOutput').addEventListener('keydown',event=>{if(event.key==='ArrowLeft'){event.preventDefault();moveTelegramOutput(-1);}if(event.key==='ArrowRight'){event.preventDefault();moveTelegramOutput(1);}});
+
+let telegramContainerData=null;
+function renderTelegramContainer(data){
+  telegramContainerData=data;
+  $('#telegramContainerStatus').textContent=data.message;
+  $('#telegramApiId').placeholder=data.credentials?.has_api_id?'api_id сохранён локально':'Число с my.telegram.org';
+  $('#telegramApiHash').placeholder=data.credentials?.has_api_hash?'api_hash сохранён локально':'32 символа с my.telegram.org';
+  const blocked=Boolean(data.busy||telegramLastData?.busy||telegramActionBusy);
+  $('#telegramApiCredentials').disabled=blocked;
+  $('#telegramContainerStart').disabled=blocked||(data.status==='running'&&!data.restart_required);
+  $('#telegramContainerStart').textContent=data.restart_required?'Применить ключи и запустить Bot API':'Запустить Bot API';
+  $('#telegramContainerStop').disabled=blocked||data.status==='stopped'||data.status==='checking';
+  $('#telegramContainerHint').textContent=telegramLastData?.busy?'Управление доступно после завершения очереди Telegram.':data.restart_required?'Ключи сохранены. Применение перезапустит работающий контейнер.':'';
+  if(data.busy){
+    for(const id of ['telegramPrepareCurrent','telegramPrepareAll','telegramPublish','telegramPublishPrefix','telegramCheck'])$('#'+id).disabled=true;
+  }
+}
+async function refreshTelegramContainer(){
+  if($('#telegramMode').value!=='local')return;
+  try{renderTelegramContainer(await telegramAPI('/api/telegram/container/status',{}));}
+  catch(error){$('#telegramContainerStatus').textContent=error.message;}
+}
+for(const [id,action] of [['telegramContainerStart','start'],['telegramContainerStop','stop']]){
+  $('#'+id).onclick=()=>telegramAction(async()=>{
+    renderTelegramContainer(await telegramAPI('/api/telegram/container/action',{action}));
+  });
+}
+
+$('#telegramApiSave').onclick=()=>telegramAction(async()=>{
+  await telegramAPI('/api/telegram/container/credentials',{api_id:$('#telegramApiId').value,api_hash:$('#telegramApiHash').value});
+  $('#telegramApiId').value='';$('#telegramApiHash').value='';
+  $('#telegramNotice').textContent='Ключи Bot API сохранены локально.';
+});

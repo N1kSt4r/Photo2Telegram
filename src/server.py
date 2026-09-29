@@ -28,9 +28,11 @@ from filelock import FileLock, Timeout
 if __package__:
     from .preview_cache import PreviewCache
     from .telegram_sender import Publisher
+    from .bot_api_container import BotAPIContainer
 else:
     from preview_cache import PreviewCache
     from telegram_sender import Publisher
+    from bot_api_container import BotAPIContainer
 
 register_heif_opener()
 
@@ -95,7 +97,8 @@ def image_preview(source, target, size):
 
 
 class Library:
-    def __init__(self, root, data):
+    def __init__(self, root, data, credentials_path=None):
+        self.credentials_path = credentials_path or (data / '.env')
         self.root, self.data = root.resolve(), data.resolve()
         self.data.mkdir(parents=True, exist_ok=True)
         self.cache = self.data / 'previews'
@@ -344,6 +347,7 @@ class LibraryManager:
                          if self.registry_path.exists() else {})
         self.current = None
         self.libraries = {}
+        self.bot_api_container = BotAPIContainer(APP.parent)
         self.switch(root)
 
     @staticmethod
@@ -370,7 +374,7 @@ class LibraryManager:
             # are still finishing when this folder is opened again.
             library = self.libraries.get(key)
             if library is None:
-                library = Library(root, self.data / relative)
+                library = Library(root, self.data / relative, APP.parent / '.env')
             else:
                 library.refresh()
             registry = {**self.registry, key: {'root': str(root), 'data': relative}}
@@ -566,6 +570,18 @@ def handler_for(manager):
                 data = json.loads(self.rfile.read(size) or b'{}')
                 if self.path == '/api/telegram/status':
                     return self.respond(200, library.publisher.status())
+                if self.path == '/api/telegram/container/status':
+                    return self.respond(200, manager.bot_api_container.status())
+                if self.path == '/api/telegram/container/credentials':
+                    if any(item.publisher.busy() for item in manager.libraries.values()):
+                        raise ValueError('Дождитесь завершения очереди Telegram перед изменением ключей Bot API')
+                    return self.respond(200, manager.bot_api_container.save_credentials(data))
+                if self.path == '/api/telegram/container/action':
+                    if any(item.publisher.busy() for item in manager.libraries.values()):
+                        raise ValueError('Сначала остановите очередь Telegram и дождитесь окончания текущего поста или подготовки')
+                    return self.respond(200, manager.bot_api_container.action(data.get('action')))
+                if self.path in ('/api/telegram/prepare', '/api/telegram/send', '/api/telegram/send-ready', '/api/telegram/check') and manager.bot_api_container.busy():
+                    raise ValueError('Дождитесь завершения запуска или остановки Bot API')
                 if self.path == '/api/telegram/settings':
                     return self.respond(200, library.publisher.save_settings(data))
                 if self.path == '/api/telegram/check':

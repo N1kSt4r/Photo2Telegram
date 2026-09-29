@@ -17,6 +17,12 @@ import uuid
 from PIL import Image
 
 
+if __package__:
+    from .telegram_credentials import TelegramCredentials
+else:
+    from telegram_credentials import TelegramCredentials
+
+
 class TelegramError(Exception):
     def __init__(self, message, uncertain=False, retry_after=0):
         super().__init__(message)
@@ -164,7 +170,16 @@ class Publisher:
         self.lock = threading.RLock()
         self.settings_path = library.data / 'telegram-settings.json'
         self.journal_path = library.data / 'telegram-sent.json'
-        self.settings = load_json(self.settings_path, {})
+        self.credentials = TelegramCredentials(library.credentials_path)
+        self.token_key = 'TELEGRAM_BOT_TOKEN_' + hashlib.sha256(str(library.data.resolve()).encode()).hexdigest()[:16].upper()
+        self._settings = load_json(self.settings_path, {})
+        self.token_key = self._settings.get('_token_key', self.token_key)
+        legacy = self._settings.pop('token', '')
+        if legacy:
+            if not self.credentials.read().get(self.token_key):
+                self.credentials.update({self.token_key: legacy})
+            self._settings['_token_key'] = self.token_key
+            write_json(self.settings_path, self._settings, private=True)
         self.journal = load_json(self.journal_path, {})
         self.job = None
         self._working = False
@@ -189,6 +204,10 @@ class Publisher:
         if self.outbox.exists():
             shutil.rmtree(self.outbox)
 
+    @property
+    def settings(self):
+        return {**{k: v for k, v in self._settings.items() if k != '_token_key'}, 'token': self.credentials.read().get(self.token_key, '')}
+
     def busy(self):
         return self._working
 
@@ -201,13 +220,17 @@ class Publisher:
             if self.busy():
                 raise ValueError('Сначала завершите или отмените очередь отправки')
             settings = validated_settings(value, self.settings)
-            write_json(self.settings_path, settings, private=True)
-            if settings != self.settings:
+            previous = self.settings
+            self.credentials.update({self.token_key: settings['token']})
+            local_settings = {k: v for k, v in settings.items() if k != 'token'}
+            local_settings['_token_key'] = self.token_key
+            write_json(self.settings_path, local_settings, private=True)
+            if settings != previous:
                 self._checked = None
                 self.job = None
                 self._display_items = {}
                 self._cleanup()
-            self.settings = settings
+            self._settings = local_settings
             return self.public_settings()
 
     def check(self):
@@ -231,14 +254,15 @@ class Publisher:
         return destination
 
     def _overview(self):
+        settings = self.settings
         with self.library.lock:
             revision = self.library.state['revision']
             posts = copy.deepcopy(self.library.state['posts'])
-        signature = (revision, json.dumps(self.settings, sort_keys=True), len(self.journal))
+        signature = (revision, json.dumps(settings, sort_keys=True), len(self.journal))
         if self._overview_cache and self._overview_cache[0] == signature and time.monotonic()-self._overview_cache[1] < 5:
             return copy.deepcopy(self._overview_cache[2])
-        channel = self.settings.get('channel', '')
-        bot_id = self.settings.get('token', '').split(':')[0]
+        channel = settings.get('channel', '')
+        bot_id = settings.get('token', '').split(':')[0]
         records = {}
         for key, record in self.journal.items():
             matches = channel in (str(record.get('chat_id')), record.get('channel_input')) or (
@@ -263,7 +287,7 @@ class Publisher:
                         source = self.library.files.get(ident)
                         try:
                             if source:
-                                key = self._media_cache_key(source, self.settings)
+                                key = self._media_cache_key(source, settings)
                                 meta = load_json(self.media_cache / (key+'.json'), {})
                                 target = self.media_cache / (key+('.mp4' if info['kind']=='video' else '.jpg'))
                                 if isinstance(meta, dict) and target.is_file() and meta.get('bytes') == target.stat().st_size:

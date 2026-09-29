@@ -57,3 +57,9 @@ button.telegram-media-open{border:0;padding:0;border-radius:0;background:transpa
 .telegram-media-state{position:absolute;inset:35% 4px auto;text-align:center;color:white;background:#151a16b8;border-radius:4px;padding:5px 3px;font-size:11px;pointer-events:none}
 .telegram-media-state small{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;font-size:10px;margin-top:3px;color:#ffe4dd;overflow-wrap:anywhere}
 .telegram-media-failed{outline:2px solid #b34029;outline-offset:-2px}
+
+#telegramContainer{margin:16px 0;padding:16px;border:1px solid var(--line,#ddd);border-radius:12px}#telegramContainerStatus{margin:8px 0}#telegramContainerHint{display:block;margin-top:8px}
+#telegramApiCredentials{border:0;min-width:0;margin:20px 0;padding:0;display:grid;gap:16px}
+#telegramApiCredentials .field{min-width:0;display:flex;flex-direction:column;gap:8px;line-height:1.4}
+#telegramApiCredentials .field input{margin:0;min-width:0;width:100%}
+#telegramApiSave{justify-self:start;max-width:100%;line-height:1.4;text-align:left}

@@ -2,6 +2,11 @@
 /data/
 /.local/
 
+# Local Docker credentials; keep the empty template tracked
+.env
+.env.*
+!.env.example
+
 # Exported posts (also when a media library is nested in the repository)
 Посты для Telegram/
 
