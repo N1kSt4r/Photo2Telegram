@@ -17,6 +17,24 @@ function setup(posts,active){
 }
 const post=(id,caption='',photos=[])=>({id,title:'Название для себя',caption,photos});
 
+test('storage polling clears recovered read errors but preserves cleanup messages',async()=>{
+  const app=setup([post('current')],'current');
+  app.run(`
+    globalThis.notice={textContent:''};
+    document.querySelector=()=>notice;
+    showGeneratedStorage=()=>{};
+    api=async()=>{throw Object.assign(new Error('Not found'),{status:404});};
+  `);
+  await app.run('refreshGeneratedStorage()');
+  assert.match(app.run('notice.textContent'),/Перезапустите сервер/);
+  app.run('api=async()=>({})');
+  await app.run('refreshGeneratedStorage()');
+  assert.equal(app.run('notice.textContent'),'');
+  app.run("notice.textContent='Ошибка удаления'");
+  await app.run('refreshGeneratedStorage()');
+  assert.equal(app.run('notice.textContent'),'Ошибка удаления');
+});
+
 test('empty abandoned drafts are removed; text, media and active draft survive',()=>{
   const app=setup([post('photo','',['file']),post('empty',' \n '),post('text','Подпись'),post('active')],'active');
   app.run('changed()');

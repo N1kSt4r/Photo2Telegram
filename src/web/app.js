@@ -290,6 +290,8 @@ function bind() {
   $('#cacheDialog').addEventListener('close',()=>clearTimeout(cacheStatsTimer));
   $('#saveCacheLimit').onclick=()=>changeCache(false);
   $('#clearCache').onclick=()=>changeCache(true);
+  $('#clearPreparedStorage').onclick=()=>clearGeneratedStorage('prepared');
+  $('#clearExportStorage').onclick=()=>clearGeneratedStorage('exports');
   $('#refreshLibrary').onclick=refreshLibrary;
   $('#chooseFolder').onclick=()=>{$('#folderDialog').showModal();browseFolders(folderPath);};
   $('#closeFolder').onclick=()=>$('#folderDialog').close();
@@ -347,6 +349,7 @@ function showCacheStats(stats, updateLimit=true) {
 async function openCache() {
   $('#cacheDialog').showModal();$('#cacheStats').textContent='Загрузка…';$('#cacheBreakdown').replaceChildren();
   try {showCacheStats(await api('/api/cache'));} catch(e) {$('#cacheStats').textContent=e.message;}
+  await refreshGeneratedStorage();
   clearTimeout(cacheStatsTimer);
   if($('#cacheDialog').open)cacheStatsTimer=setTimeout(refreshCacheStats,1500);
 }
@@ -356,9 +359,47 @@ async function refreshCacheStats() {
     if(!$('#clearCache').disabled) {
       const stats=await api('/api/cache');
       if($('#cacheDialog').open&&!$('#clearCache').disabled)showCacheStats(stats,false);
+      await refreshGeneratedStorage();
     }
   } catch { /* Keep the last reading while the server restarts. */ }
   finally {if($('#cacheDialog').open)cacheStatsTimer=setTimeout(refreshCacheStats,1500);}
+}
+let generatedStorageBusy=false, generatedStorageReadError=false;
+function showGeneratedStorage(stats){
+  const prepared=stats.prepared, exports=stats.exports;
+  $('#preparedStorageStats').textContent=`${formatBytes(prepared.bytes)} · файлов: ${prepared.files}${prepared.busy?' · выполняется подготовка или отправка':''}`;
+  $('#exportStorageStats').textContent=`${formatBytes(exports.bytes)} · экспортов: ${exports.folders} · файлов: ${exports.files}${exports.busy?' · экспорт выполняется':''}`;
+  $('#clearPreparedStorage').disabled=generatedStorageBusy||prepared.busy||!prepared.files;
+  $('#clearExportStorage').disabled=generatedStorageBusy||exports.busy||!exports.folders;
+}
+async function refreshGeneratedStorage(){
+  if(generatedStorageBusy)return;
+  try{
+    const stats=await api('/api/generated-storage');
+    if(generatedStorageBusy)return;
+    showGeneratedStorage(stats);
+    if(generatedStorageReadError)$('#generatedStorageNotice').textContent='';
+    generatedStorageReadError=false;
+  }catch(e){
+    if(generatedStorageBusy)return;
+    generatedStorageReadError=true;
+    $('#generatedStorageNotice').textContent=e.status===404?'Сервер ещё не поддерживает учёт файлов. Перезапустите сервер и обновите страницу.':e.message;
+  }
+}
+async function clearGeneratedStorage(category){
+  if(generatedStorageBusy)return;
+  const message=category==='prepared'?'Удалить подготовленные JPEG и MP4? Неотправленные посты потребуется подготовить заново. Исходники, посты и история отправки сохранятся.':'Удалить созданные приложением файлы экспортов для этой библиотеки? Это копии оригиналов и подписи в папке «Посты для Telegram». Исходные файлы и черновики сохранятся.';
+  if(!confirm(message))return;
+  generatedStorageBusy=true;
+  generatedStorageReadError=false;
+  $('#clearPreparedStorage').disabled=true;$('#clearExportStorage').disabled=true;
+  $('#generatedStorageNotice').textContent='Удаляем созданные файлы…';
+  try{
+    await api('/api/generated-storage/clear',{category});
+    $('#generatedStorageNotice').textContent='Созданные файлы удалены. Исходники и черновики сохранены.';
+    if(category==='exports'){$('#exportResult').hidden=true;exportId=null;}
+  }catch(e){$('#generatedStorageNotice').textContent=e.message;}
+  finally{generatedStorageBusy=false;await refreshGeneratedStorage();}
 }
 async function changeCache(clear) {
   $('#clearCache').disabled=true;$('#saveCacheLimit').disabled=true;$('#cacheLimit').disabled=true;

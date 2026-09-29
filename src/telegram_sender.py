@@ -19,8 +19,10 @@ from PIL import Image
 
 if __package__:
     from .telegram_credentials import TelegramCredentials
+    from .generated_storage import prepared_paths, file_stats
 else:
     from telegram_credentials import TelegramCredentials
+    from generated_storage import prepared_paths, file_stats
 
 
 class TelegramError(Exception):
@@ -211,6 +213,24 @@ class Publisher:
 
     def busy(self):
         return self._working
+
+    def _storage_paths(self):
+        return (prepared_paths(self.media_cache, r'[a-f0-9]{64}\.(?:jpg|mp4|json|tmp)') +
+                prepared_paths(self.outbox, r'[a-f0-9]{32}\.(?:jpg|mp4)'))
+
+    def storage_stats(self):
+        with self.lock:
+            return dict(file_stats(self._storage_paths()), busy=self.busy())
+
+    def clear_storage(self):
+        with self.lock:
+            if self.busy():
+                raise ValueError('Сначала остановите подготовку или отправку и дождитесь её завершения')
+            self.job = None
+            self._display_items = {}
+            self._overview_cache = None
+            for path in self._storage_paths():
+                path.unlink(missing_ok=True)
 
     def public_settings(self):
         with self.lock:

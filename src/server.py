@@ -29,10 +29,12 @@ if __package__:
     from .preview_cache import PreviewCache
     from .telegram_sender import Publisher
     from .bot_api_container import BotAPIContainer
+    from .generated_storage import export_files, clear_exports, file_stats
 else:
     from preview_cache import PreviewCache
     from telegram_sender import Publisher
     from bot_api_container import BotAPIContainer
+    from generated_storage import export_files, clear_exports, file_stats
 
 register_heif_opener()
 
@@ -292,6 +294,26 @@ class Library:
             self.preview_cache.record(target)
             return target.read_bytes() if read_bytes else target
 
+    def generated_stats(self):
+        prepared = self.publisher.storage_stats()
+        with self.lock:
+            exports = export_files(self.root)
+            return dict(prepared=prepared,
+                        exports=dict(file_stats(path for _, paths, _ in exports for path in paths),
+                                     folders=len(exports), busy=any(job['status'] == 'working' for job in self.jobs.values())))
+
+    def clear_generated(self, category):
+        if category == 'prepared':
+            self.publisher.clear_storage()
+        elif category == 'exports':
+            with self.lock:
+                if any(job['status'] == 'working' for job in self.jobs.values()):
+                    raise ValueError('Дождитесь завершения экспорта')
+                clear_exports(self.root)
+        else:
+            raise ValueError('Неизвестная категория файлов')
+        return self.generated_stats()
+
     def export(self):
         with self.lock:
             posts = json.loads(json.dumps([p for p in self.state['posts'] if p['photos'] or p['caption'].strip()]))
@@ -316,19 +338,21 @@ class Library:
                 manifest = []
                 for n, post in enumerate(posts, 1):
                     title = re.sub(r'[^\w\s—-]', '', post['title'], flags=re.UNICODE).strip()[:65] or 'Пост'
-                    folder = output / f'{n:03d} — {title}'
+                    manifest.append(dict(folder=f'{n:03d} — {title}',
+                                         files=[f'{i:02d} — {export_files[photo].name}' for i, photo in enumerate(post['photos'], 1)],
+                                         caption=post['caption']))
+                # Track planned files before copying, so interrupted exports can be cleaned too.
+                atomic_json(output / 'Порядок постов.json', manifest)
+                for post, entry in zip(posts, manifest):
+                    folder = output / entry['folder']
                     folder.mkdir()
-                    exported = []
                     for i, photo in enumerate(post['photos'], 1):
                         src = export_files[photo]
                         name = f'{i:02d} — {src.name}'
                         shutil.copy2(src, folder / name)
-                        exported.append(name)
                     if post['caption'].strip():
                         (folder / 'Подпись.txt').write_text(post['caption'], encoding='utf-8')
-                    manifest.append(dict(folder=folder.name, files=exported, caption=post['caption']))
                     job['done'] += 1
-                atomic_json(output / 'Порядок постов.json', manifest)
                 (output / 'Как отправить.txt').write_text('Папки пронумерованы в порядке публикации.\nВ каждой папке выберите фотографии и видео, затем вставьте текст из файла «Подпись.txt», если он есть. Если в папке только «Подпись.txt», отправьте его содержимое отдельным текстовым сообщением.\nФайлы — точные копии оригиналов. Номера в именах обозначают желаемый порядок; проверьте его в Telegram перед отправкой.\nДля HEIC способ отправки и отображение зависят от клиента Telegram.\n', encoding='utf-8')
                 job.update(status='done', path=str(output))
             except Exception as e:
@@ -520,6 +544,8 @@ def handler_for(manager):
                     return self.respond(200, path.read_bytes(), 'image/jpeg')
                 if url.path == '/api/cache':
                     return self.respond(200, library.preview_cache.stats())
+                if url.path == '/api/generated-storage':
+                    return self.respond(200, library.generated_stats())
                 if url.path == '/api/library':
                     with library.lock:
                         return self.respond(200, dict(photos=library.photos, state=library.state, token=library.token, folder=library.root.name, folderPath=str(library.root), project=manager.key(library.root)))
@@ -627,6 +653,8 @@ def handler_for(manager):
                     return self.respond(200, {'ok': True})
                 if self.path == '/api/cache/clear':
                     return self.respond(200, library.preview_cache.clear())
+                if self.path == '/api/generated-storage/clear':
+                    return self.respond(200, library.clear_generated(data.get('category')))
                 if self.path == '/api/cache/limit':
                     return self.respond(200, library.preview_cache.set_limit(data.get('limit_bytes')))
                 if self.path == '/api/refresh':
