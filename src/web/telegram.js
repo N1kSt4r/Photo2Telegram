@@ -1,5 +1,7 @@
 'use strict';
 let telegramTimer=null, telegramJobId=null, telegramSettingsLoaded=false, telegramActionBusy=false, telegramLastData=null;
+let telegramSelectionScope=null, telegramSelectionDefault=null;
+const telegramSelection=new Map();
 const telegramLabels={cached:'Готов в кэше',sending:'Отправляется',sent:'Отправлен',unknown:'Результат неизвестен',error:'Ошибка',retry:'Повтор разрешён'};
 async function telegramAPI(path,data){
   const controller=new AbortController();
@@ -52,6 +54,11 @@ function telegramThumbnail(file,index,post){
   return `<figure class="telegram-media ${stateText?'telegram-media-pending':''} ${fileState==='error'?'telegram-media-failed':''}" title="${esc(file.name)}${file.error?' · '+esc(file.error):''}${file.cached?' · Из кэша':''}${link?' · Открыть файл для отправки':''}">${!link&&post.status==='sent'&&post.link?`<a class="telegram-media-open" href="${esc(post.link)}" target="_blank" rel="noopener noreferrer">`:`<button class="telegram-media-open" data-output-post="${esc(post.id)}" data-output-index="${index}" aria-label="Открыть файл для отправки: ${esc(file.name)}">`}<img src="${esc(photo?photoURL(file.id):'/missing.svg')}" loading="lazy" decoding="async" alt="${esc(file.name)}"><span class="telegram-media-top">${esc(format)}${file.bytes==null?'':`<span class="telegram-media-size">${formatBytes(file.bytes)}</span>`}</span>${stateText?`<span class="telegram-media-state">${esc(stateText)}${fileState==='error'&&file.error?`<small>${esc(shortTelegramError(file))}</small>`:''}</span>`:''}<span class="telegram-media-number">${index+1}</span>${duration?`<span class="telegram-media-duration">▶ ${esc(duration)}</span>`:''}${!link&&post.status==='sent'&&post.link?'</a>':'</button>'}</figure>`;
 }
 function renderTelegram(data){
+  if(telegramSelectionScope!==project){
+    telegramSelectionScope=project;telegramSelection.clear();telegramSelectionDefault=null;
+  }else{
+    for(const input of document.querySelectorAll('[data-telegram-post]'))telegramSelection.set(input.dataset.telegramPost,input.checked);
+  }
   telegramLastData=data;
   if(!telegramSettingsLoaded){
     const settings=data.settings;
@@ -69,14 +76,17 @@ function renderTelegram(data){
     const elapsed=job.status==='sending'&&job.transfer_started?Math.max(0,(Date.now()/1000-job.transfer_started)):0;
     const speed=job.upload_speed?` · ${formatBytes(job.upload_speed)}/с`:'';
     const resumable=job.status==='ready'||job.can_resume||job.items.some(p=>p.status==='cached');
-    $('#telegramProgress').textContent=`${job.message} · ${job.done} / ${job.total} · уже отправлено: ${job.sent??job.skipped??0}`;
+    $('#telegramProgress').textContent=job.message;
     $('#telegramTransfer').textContent=job.upload_total?`Передано Bot API: ${formatBytes(job.uploaded)} / ${formatBytes(job.upload_total)}${speed}${job.upload_seconds?' · загрузка '+job.upload_seconds.toFixed(1)+' с':''}${elapsed?' · всего '+Math.floor(elapsed)+' с':''}`:'';
-    $('#telegramProgressBar').max=Math.max(1,job.total);$('#telegramProgressBar').value=job.done;
+    const sentCount=job.items.filter(p=>p.status==='sent').length;
+    const processedCount=job.items.filter(p=>['ready','cached','sent','sending','unknown'].includes(p.status)).length;
+    const sending=['sending','done'].includes(job.status);
+    $('#telegramProgressBar').max=Math.max(1,job.items.length);$('#telegramProgressBar').value=sending?sentCount:processedCount;
+    $('#telegramProgressBar').setAttribute('aria-label',sending?'Отправлено постов':'Обработано постов');
     $('#telegramChannelStatus').textContent=job.channel_status==='checking'?'Канал: проверяется…':job.channel_status==='error'?`Канал: ${job.channel_error}. Повторите проверку подключения.`:job.channel_status==='ready'?'Канал: проверен':'';
     $('#telegramDestination').textContent=job.destination?`Канал: ${job.destination.channel} (${job.destination.chat_id}) · бот @${job.destination.bot} · ${job.mode==='local'?'локальный Bot API: '+job.endpoint:'обычный Bot API'}`:'';
     const hideSent=$('#telegramHideSent').checked;
-    const readyCount=job.items.filter(p=>['ready','cached'].includes(p.status)).length;
-    $('#telegramCounts').textContent=`Всего: ${job.items.length} · готово: ${readyCount} · отправлено: ${job.sent||0} · остальные: ${job.items.length-readyCount-(job.sent||0)}`;
+    $('#telegramCounts').textContent=`${processedCount}/${job.items.length} обработано · ${sentCount}/${job.items.length} отправлено`;
     const review=JSON.stringify([job.id,job.status,job.items,hideSent,Boolean(busy)]);
     if($('#telegramReview').dataset.review!==review){
       $('#telegramReview').dataset.review=review;
@@ -85,7 +95,8 @@ function renderTelegram(data){
         if(!['ready','cached','sent'].includes(post.status))blocked=true;
         if(hideSent&&post.status==='sent')return '';
         const selectable=resumable&&['ready','cached'].includes(post.status);
-        return `<div class="telegram-post"><label class="telegram-post-heading">${selectable?`<input type="checkbox" data-telegram-post="${esc(post.id)}" ${blocked?'':'checked'}> `:''}<strong>${n+1}. ${post.link?`<a class="telegram-post-link" href="${esc(post.link)}" target="_blank" rel="noopener noreferrer">${esc(post.title||'Без названия')}</a>`:esc(post.title||'Без названия')} · ${esc({cached:'Готов в кэше',sending:'Отправляется',unknown:'Проверьте канал',unprepared:'Не подготовлен',preparing:'Готовится',ready:'Готов',error:'Ошибка',sent:'Уже отправлен'}[post.status]||post.status)}</strong></label>${post.error?`<p class="error">${esc(post.error)}</p>`:''}${post.caption?`<p>${esc(post.caption)}</p>`:''}<div class="telegram-media-grid">${post.files.map((file,index)=>telegramThumbnail(file,index,post)).join('')}</div>${post.resolve_key&&post.status==='unknown'?`<p>Проверьте канал и отметьте результат:</p><div class="telegram-actions"><button data-telegram-resolve="sent" data-key="${esc(post.resolve_key)}" ${busy?'disabled':''}>Пост есть в канале</button><button data-telegram-resolve="retry" data-key="${esc(post.resolve_key)}" ${busy?'disabled':''}>Проверил: поста нет</button></div>`:''}</div>`;
+        const selected=telegramSelection.get(post.id)??telegramSelectionDefault??!blocked;
+        return `<div class="telegram-post"><label class="telegram-post-heading">${selectable?`<input type="checkbox" data-telegram-post="${esc(post.id)}" ${selected?'checked':''} ${busy?'disabled':''}> `:''}<strong>${n+1}. ${post.link?`<a class="telegram-post-link" href="${esc(post.link)}" target="_blank" rel="noopener noreferrer">${esc(post.title||'Без названия')}</a>`:esc(post.title||'Без названия')} · ${esc({cached:'Готов в кэше',sending:'Отправляется',unknown:'Проверьте канал',unprepared:'Не подготовлен',preparing:'Готовится',ready:'Готов',error:'Ошибка',sent:'Уже отправлен'}[post.status]||post.status)}</strong></label>${post.error?`<p class="error">${esc(post.error)}</p>`:''}${post.caption?`<p>${esc(post.caption)}</p>`:''}<div class="telegram-media-grid">${post.files.map((file,index)=>telegramThumbnail(file,index,post)).join('')}</div>${post.resolve_key&&post.status==='unknown'?`<p>Проверьте канал и отметьте результат:</p><div class="telegram-actions"><button data-telegram-resolve="sent" data-key="${esc(post.resolve_key)}" ${busy?'disabled':''}>Пост есть в канале</button><button data-telegram-resolve="retry" data-key="${esc(post.resolve_key)}" ${busy?'disabled':''}>Проверил: поста нет</button></div>`:''}</div>`;
       }).join('');
       // Keep already decoded previews when statuses or sizes change.
       const images=new Map();
@@ -102,6 +113,7 @@ function renderTelegram(data){
       $('#telegramReview').replaceChildren(template.content);
     }
     $('#telegramPublish').hidden=!resumable;$('#telegramPublish').disabled=busy;
+    updateTelegramSelectAll();
     $('#telegramPublishPrefix').hidden=!resumable;
     const firstBlocked=job.items.findIndex(p=>!['ready','cached','sent'].includes(p.status));
     $('#telegramPublishPrefix').disabled=busy||!job.items.slice(0,firstBlocked<0?job.items.length:firstBlocked).some(p=>['ready','cached'].includes(p.status));
@@ -170,11 +182,29 @@ $('#telegramPublishPrefix').onclick=()=>telegramAction(async()=>{
   await sendTelegramSelection(ids);
 });
 $('#telegramCancel').onclick=()=>telegramAction(async()=>{await telegramAPI('/api/telegram/cancel',{});});
-$('#telegramHideSent').onchange=()=>{
-  const selection=new Map([...document.querySelectorAll('[data-telegram-post]')].map(input=>[input.dataset.telegramPost,input.checked]));
-  if(telegramLastData)renderTelegram(telegramLastData);
-  for(const input of document.querySelectorAll('[data-telegram-post]'))if(selection.has(input.dataset.telegramPost))input.checked=selection.get(input.dataset.telegramPost);
+function updateTelegramSelectAll(){
+  const inputs=[...document.querySelectorAll('[data-telegram-post]')];
+  const selected=inputs.filter(input=>input.checked).length;
+  const all=$('#telegramSelectAll');
+  all.checked=inputs.length>0&&selected===inputs.length;
+  all.indeterminate=selected>0&&selected<inputs.length;
+  all.disabled=!inputs.length||Boolean(telegramLastData?.busy)||telegramActionBusy;
+}
+$('#telegramSelectAll').onchange=()=>{
+  telegramSelectionDefault=$('#telegramSelectAll').checked;
+  for(const input of document.querySelectorAll('[data-telegram-post]')){
+    input.checked=telegramSelectionDefault;
+    telegramSelection.set(input.dataset.telegramPost,input.checked);
+  }
+  updateTelegramSelectAll();
 };
+$('#telegramReview').addEventListener('change',event=>{
+  if(event.target.matches('[data-telegram-post]')){
+    telegramSelection.set(event.target.dataset.telegramPost,event.target.checked);
+    updateTelegramSelectAll();
+  }
+});
+$('#telegramHideSent').onchange=()=>{if(telegramLastData)renderTelegram(telegramLastData);};
 $('#telegramReview').onclick=e=>{
   if(e.target.closest('[data-show-sent]')){$('#telegramHideSent').checked=false;renderTelegram(telegramLastData);return;}
   const output=e.target.closest('[data-output-post]');
