@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local photo editor. Pillow + pillow-heif; no uploads."""
+"""Local photo editor with optional, explicit Telegram publishing."""
 import argparse
 import hashlib
 import io
@@ -27,8 +27,10 @@ from filelock import FileLock, Timeout
 
 if __package__:
     from .preview_cache import PreviewCache
+    from .telegram_sender import Publisher
 else:
     from preview_cache import PreviewCache
+    from telegram_sender import Publisher
 
 register_heif_opener()
 
@@ -129,6 +131,7 @@ class Library:
                 self.catalog[ident] = dict(id=ident, name=f'Недоступный файл ({ident})',
                                           date='', dateSource='unknown', kind='photo')
         self.refresh()
+        self.publisher = Publisher(self, image_preview)
         self.validate(self.state)
 
     def refresh(self):
@@ -356,6 +359,8 @@ class LibraryManager:
         with self.lock:
             if self.current and self.current.root == root:
                 return self.current
+            if self.current and self.current.publisher.busy():
+                raise ValueError('Завершите или отмените подготовку/отправку в Telegram перед сменой папки')
             if self.current and any(job['status'] == 'working' for job in self.current.jobs.values()):
                 raise ValueError('Дождитесь завершения экспорта перед сменой папки')
             key = self.key(root)
@@ -495,11 +500,18 @@ def handler_for(manager):
                 return self.respond(403, {'error': 'Forbidden host'})
             library = manager.current
             url = urlparse(self.path)
-            if url.path.startswith(('/photo/', '/video/')):
+            if url.path.startswith(('/photo/', '/video/', '/telegram-file/')):
                 project = parse_qs(url.query).get('project')
                 if project and project != [manager.key(library.root)]:
                     return self.respond(409, {'error': 'Библиотека изменена. Обновите страницу.'})
             try:
+                if url.path.startswith('/telegram-file/'):
+                    path = library.publisher.prepared_file(url.path.removeprefix('/telegram-file/'))
+                    if path is None:
+                        return self.respond(404, {'error': 'Подготовленный файл больше не доступен. Повторите подготовку.'})
+                    if path.suffix == '.mp4':
+                        return self.stream_video(path)
+                    return self.respond(200, path.read_bytes(), 'image/jpeg')
                 if url.path == '/api/cache':
                     return self.respond(200, library.preview_cache.stats())
                 if url.path == '/api/library':
@@ -524,7 +536,7 @@ def handler_for(manager):
                             return self.respond(200, (APP / 'web' / 'video.svg').read_bytes(), 'image/svg+xml')
                         raise
                     return self.respond(200, preview, 'image/jpeg', True)
-                files = {'/': 'index.html', '/app.js': 'app.js', '/previews.js': 'previews.js', '/style.css': 'style.css', '/video.svg': 'video.svg', '/missing.svg': 'missing.svg'}
+                files = {'/': 'index.html', '/app.js': 'app.js', '/previews.js': 'previews.js', '/telegram.js': 'telegram.js', '/style.css': 'style.css', '/video.svg': 'video.svg', '/missing.svg': 'missing.svg'}
                 if url.path not in files:
                     return self.respond(404, {'error': 'Not found'})
                 name = files[url.path]
@@ -552,6 +564,22 @@ def handler_for(manager):
                 if size > 4_000_000:
                     return self.respond(413, {'error': 'Слишком большой запрос'})
                 data = json.loads(self.rfile.read(size) or b'{}')
+                if self.path == '/api/telegram/status':
+                    return self.respond(200, library.publisher.status())
+                if self.path == '/api/telegram/settings':
+                    return self.respond(200, library.publisher.save_settings(data))
+                if self.path == '/api/telegram/check':
+                    return self.respond(200, library.publisher.check())
+                if self.path == '/api/telegram/prepare':
+                    return self.respond(200, library.publisher.prepare(data.get('ids')))
+                if self.path == '/api/telegram/send-ready':
+                    return self.respond(200, library.publisher.send_ready(data.get('ids')))
+                if self.path == '/api/telegram/send':
+                    return self.respond(200, library.publisher.send(data.get('id'), data.get('ids')))
+                if self.path == '/api/telegram/cancel':
+                    return self.respond(200, library.publisher.cancel())
+                if self.path == '/api/telegram/resolve':
+                    return self.respond(200, library.publisher.resolve(data.get('key'), data.get('resolution')))
                 if self.path == '/api/folder-suggestions':
                     return self.respond(200, manager.suggest_folders(data.get('path', '')))
                 if self.path == '/api/folders':

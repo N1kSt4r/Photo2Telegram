@@ -267,7 +267,7 @@ function bind() {
   $('#largeVideo').onerror=()=>{if(!$('#largeVideo').hasAttribute('src'))return;$('#videoError').hidden=false;$('#largeVideo').hidden=true;};
   $('#largePhoto').onerror=()=>{$('#largeError').hidden=false;$('#largePhoto').hidden=true;};
   document.addEventListener('keydown',e=>{
-    if(e.target.matches('input,textarea,select,video')||$('#exportDialog').open||$('#cacheDialog').open||$('#folderDialog').open)return;
+    if(e.target.matches('input,textarea,select,video')||$('#exportDialog').open||$('#cacheDialog').open||$('#folderDialog').open||$('#telegramDialog').open)return;
     if(e.altKey&&e.target.dataset.reorder&&['ArrowLeft','ArrowRight'].includes(e.key)) {e.preventDefault();const id=e.target.dataset.reorder,p=currentPost(),i=p.photos.indexOf(id),to=p.photos[i+(e.key==='ArrowRight'?1:-1)];if(to){reorder(id,to);document.querySelector(`[data-reorder="${id}"]`)?.focus();}return;}
     if(!current||e.ctrlKey||e.metaKey||e.altKey)return;
     if(e.key==='Escape'){e.preventDefault();closeViewer();}
