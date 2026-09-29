@@ -2,6 +2,7 @@
 let telegramTimer=null, telegramJobId=null, telegramSettingsLoaded=false, telegramActionBusy=false, telegramLastData=null;
 let telegramSelectionScope=null, telegramSelectionDefault=null;
 const telegramSelection=new Map();
+let telegramConnection=null, telegramConnectionError='';
 const telegramLabels={cached:'Готов в кэше',sending:'Отправляется',sent:'Отправлен',unknown:'Результат неизвестен',error:'Ошибка',retry:'Повтор разрешён'};
 async function telegramAPI(path,data){
   const controller=new AbortController();
@@ -47,9 +48,17 @@ function telegramSettingsChanged(){
     (input.mode==='local'&&input.endpoint.trim().replace(/\/+$/,'')!==saved.endpoint);
 }
 async function saveTelegram(){
+  if(telegramSettingsChanged())telegramConnection=null;
+  telegramConnectionError='';
   const data=await telegramAPI('/api/telegram/settings',telegramConfig());
   $('#telegramToken').value='';$('#telegramToken').placeholder=data.has_token?'Токен сохранён локально; пустое поле оставляет его прежним':'Токен от @BotFather';
   return data;
+}
+function renderTelegramConnection(job){
+  const changed=telegramSettingsChanged();
+  const destination=changed?null:job?.destination||telegramConnection;
+  $('#telegramChannelStatus').textContent=changed?'Настройки изменены. Проверьте подключение.':telegramConnectionError|| (job?.channel_status==='checking'?'Проверяем подключение…':job?.channel_status==='error'?`Ошибка подключения: ${job.channel_error}`:destination?'Подключение проверено, публикация разрешена.':'');
+  $('#telegramDestination').textContent=destination?`Бот: @${destination.bot}\nКанал: ${destination.channel} (${destination.chat_id})`:'';
 }
 function shortTelegramError(file){
   let message=file.error||'';
@@ -93,6 +102,7 @@ function renderTelegram(data){
   $('#telegramConfig').disabled=Boolean(busy);
   $('#telegramPrepareCurrent').disabled=Boolean(busy);$('#telegramPrepareAll').disabled=Boolean(busy);
   $('#telegramJob').hidden=!job;
+  renderTelegramConnection(job);
   if(job){
     const elapsed=job.status==='sending'&&job.transfer_started?Math.max(0,(Date.now()/1000-job.transfer_started)):0;
     const speed=job.upload_speed?` · ${formatBytes(job.upload_speed)}/с`:'';
@@ -104,8 +114,6 @@ function renderTelegram(data){
     const sending=['sending','done'].includes(job.status);
     $('#telegramProgressBar').max=Math.max(1,job.items.length);$('#telegramProgressBar').value=sending?sentCount:processedCount;
     $('#telegramProgressBar').setAttribute('aria-label',sending?'Отправлено постов':'Обработано постов');
-    $('#telegramChannelStatus').textContent=job.channel_status==='checking'?'Канал: проверяется…':job.channel_status==='error'?`Канал: ${job.channel_error}. Повторите проверку подключения.`:job.channel_status==='ready'?'Канал: проверен':'';
-    $('#telegramDestination').textContent=job.destination?`Канал: ${job.destination.channel} (${job.destination.chat_id}) · бот @${job.destination.bot} · ${job.mode==='local'?'локальный Bot API: '+job.endpoint:'обычный Bot API'}`:'';
     const hideSent=$('#telegramHideSent').checked;
     $('#telegramCounts').textContent=`${processedCount}/${job.items.length} обработано · ${sentCount}/${job.items.length} отправлено`;
     const review=JSON.stringify([job.id,job.status,job.items,hideSent,Boolean(busy)]);
@@ -171,9 +179,16 @@ $('#telegramDialog').addEventListener('close',()=>clearTimeout(telegramTimer));
 $('#telegramMode').onchange=()=>{rememberExportMethod();telegramModeChanged();refreshTelegramContainer();};
 $('#telegramSave').onclick=()=>telegramAction(async()=>{await saveTelegram();$('#telegramNotice').textContent='Настройки сохранены локально.';});
 $('#telegramCheck').onclick=()=>telegramAction(async()=>{
-  await saveTelegram();$('#telegramNotice').textContent='Проверяем подключение…';
-  const result=await telegramAPI('/api/telegram/check',{});
-  $('#telegramNotice').textContent=`Подключено: @${result.bot}. Канал «${result.channel}» (${result.chat_id}), публикация разрешена.`;
+  await saveTelegram();$('#telegramChannelStatus').textContent='Проверяем подключение…';
+  try{
+    telegramConnection=await telegramAPI('/api/telegram/check',{});
+    renderTelegramConnection(null);
+  }catch(error){
+    telegramConnection=null;
+    telegramConnectionError=error.message;
+    $('#telegramChannelStatus').textContent=error.message;
+    throw error;
+  }
 });
 async function prepareTelegram(all){
   await telegramAction(async()=>{

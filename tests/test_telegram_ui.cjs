@@ -98,3 +98,14 @@ test('loading saved bot settings does not replace the chosen export method',()=>
   assert.equal(app.node('#telegramMode').value,'directories');
   assert.equal(app.node('#telegramBody').hidden,true);
 });
+
+test('connection details survive polling without preparation and hide after changing channel',()=>{
+  const app=setup();
+  app.run("telegramConnection={bot:'test_bot',channel:'My channel',chat_id:-100123};renderTelegramConnection(null)");
+  app.render();
+  assert.match(app.node('#telegramDestination').textContent,/@test_bot\nКанал: My channel \(-100123\)/);
+  app.run("telegramConnectionError='Connection failed'");app.render();
+  assert.equal(app.node('#telegramChannelStatus').textContent,'Connection failed');
+  app.node('#telegramChannel').value='@other';app.render();
+  assert.equal(app.node('#telegramDestination').textContent,'');
+});
