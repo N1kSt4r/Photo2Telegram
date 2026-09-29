@@ -50,6 +50,30 @@ class PublisherTest(unittest.TestCase):
         self.publisher.save_settings(dict(token=TOKEN, channel='@test_channel', mode='cloud'))
         self.library.state.update(active='one', posts=[dict(id='one', title='Первый', caption='Подпись', photos=[p['id'] for p in self.library.photos])])
 
+    def test_photo_resizes_keeps_orientation_and_quality(self):
+        from PIL import Image, JpegImagePlugin
+        source = self.root / 'large.png'
+        exif = Image.Exif()
+        exif[274] = 6
+        Image.new('RGB', (3200, 2000), (80, 160, 220)).save(source, exif=exif)
+        before = source.read_bytes()
+        target = self.root / 'prepared.jpg'
+        self.publisher._prepare_media_file(source, dict(mode='local'), target)
+        with Image.open(target) as image:
+            self.assertEqual(image.size, (1600, 2560))
+            self.assertEqual(JpegImagePlugin.get_sampling(image), 2)
+            self.assertLessEqual(image.quantization[0][0], 2)
+        self.assertEqual(source.read_bytes(), before)
+
+    def test_small_photo_is_not_upscaled(self):
+        from PIL import Image
+        source = self.root / 'small.png'
+        Image.new('RGB', (640, 480)).save(source)
+        target = self.root / 'prepared.jpg'
+        self.publisher._prepare_media_file(source, dict(mode='local'), target)
+        with Image.open(target) as image:
+            self.assertEqual(image.size, (640, 480))
+
     def wait(self):
         deadline = time.monotonic() + 10
         while self.publisher._working and time.monotonic() < deadline:

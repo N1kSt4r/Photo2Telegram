@@ -76,10 +76,11 @@ def image_date(path):
     return None
 
 
-def image_preview(source, target, size):
+def image_preview(source, target, size, *, quality=85, subsampling=-1):
     with Image.open(source) as original:
         profile = original.info.get('icc_profile')
-        original.thumbnail((size, size), Image.Resampling.LANCZOS)
+        if size is not None:
+            original.thumbnail((size, size), Image.Resampling.LANCZOS)
         image = ImageOps.exif_transpose(original)
         if 'A' in image.getbands() or 'transparency' in image.info:
             rgba = image.convert('RGBA')
@@ -93,7 +94,7 @@ def image_preview(source, target, size):
                 image = image.convert('RGB')
         else:
             image = image.convert('RGB')
-        image.save(target, 'JPEG', quality=85, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes())
+        image.save(target, 'JPEG', quality=quality, subsampling=subsampling, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes())
 
 
 class Library:

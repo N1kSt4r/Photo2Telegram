@@ -646,7 +646,7 @@ class Publisher:
     def _media_cache_key(self, source, settings):
         stat = source.stat()
         value = [str(source.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
-                 settings['mode'], self.library.ffmpeg, self.library.ffprobe, 'jpeg2560-q85-mp4-v1']
+                 settings['mode'], self.library.ffmpeg, self.library.ffprobe, ('jpeg2560-q85-mp4-v1' if source.suffix.lower() in {'.mov', '.mp4', '.m4v', '.webm'} else 'jpeg2560-q95-420-v4')]
         return hashlib.sha256(json.dumps(value).encode()).hexdigest()
 
     def _has_media_cache(self, source, settings):
@@ -741,7 +741,7 @@ class Publisher:
         video = source.suffix.lower() in {'.mov', '.mp4', '.m4v', '.webm'}
         converted = True
         if not video:
-            self.image_preview(source, target, 2560)
+            self.image_preview(source, target, 2560, quality=95, subsampling=2)
             with Image.open(target) as image:
                 if max(image.size) / min(image.size) > 20:
                     raise ValueError(f'{source.name}: слишком вытянутое фото для Telegram (соотношение больше 20:1)')
