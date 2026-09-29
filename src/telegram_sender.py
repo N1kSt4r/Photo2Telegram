@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import http.client
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -730,8 +731,11 @@ class Publisher:
                 if valid:
                     self._link_or_copy(cached, target)
                     os.utime(metadata, None)
-                    return dict(path=target, kind='video' if video else 'photo', name=source.name,
-                                converted=info['converted'], cached=True, cache_key=key)
+                    result = dict(path=target, kind='video' if video else 'photo', name=source.name,
+                                  converted=info['converted'], cached=True, cache_key=key)
+                    if video:
+                        self._prepare_video_attributes(result, info, metadata)
+                    return result
                 if self.cancelled.is_set():
                     raise ValueError('Подготовка отменена')
                 if (self.job or {}).get('_cache_only'):
@@ -743,11 +747,83 @@ class Publisher:
                 metadata.unlink(missing_ok=True)
                 cached.unlink(missing_ok=True)
                 self._link_or_copy(target, cached)
-                write_json(metadata, dict(bytes=cached.stat().st_size, converted=result['converted']))
-                return dict(result, cached=False, cache_key=key)
+                info = dict(bytes=cached.stat().st_size, converted=result['converted'])
+                write_json(metadata, info)
+                result.update(cached=False, cache_key=key)
+                if video:
+                    self._prepare_video_attributes(result, info, metadata)
+                return result
             except Exception:
                 target.unlink(missing_ok=True)
+                if video:
+                    target.with_suffix('.jpg').unlink(missing_ok=True)
                 raise
+
+    def _prepare_video_attributes(self, media, info, metadata):
+        """Enrich old and new MP4 caches without encoding the video again."""
+        attributes = info.get('video')
+        if not attributes and self.library.ffprobe:
+            probe = self._run_media_tool([self.library.ffprobe, '-v', 'error', '-show_streams',
+                                         '-show_format', '-of', 'json', str(media['path'])], timeout=30)
+            try:
+                if probe.returncode:
+                    raise ValueError()
+                data = json.loads(probe.stdout)
+                stream = next(s for s in data['streams'] if s.get('codec_type') == 'video')
+                width, height = int(stream['width']), int(stream['height'])
+                sar = stream.get('sample_aspect_ratio', '1:1')
+                if sar not in ('N/A', '0:1'):
+                    numerator, denominator = map(int, sar.split(':'))
+                    width = round(width * numerator / denominator)
+                rotation = float(stream.get('tags', {}).get('rotate', 0))
+                for side in stream.get('side_data_list', []):
+                    if 'rotation' in side:
+                        rotation = float(side['rotation'])
+                if round(rotation) % 180 == 90:
+                    width, height = height, width
+                duration = float(data.get('format', {}).get('duration') or stream.get('duration', 0))
+                if min(width, height) <= 0 or not math.isfinite(duration) or duration <= 0:
+                    raise ValueError()
+                attributes = dict(width=width, height=height, duration=max(1, round(duration)))
+            except (ValueError, KeyError, TypeError, StopIteration, ZeroDivisionError):
+                raise ValueError(f'{media["name"]}: не удалось определить размеры и длительность видео') from None
+            info['video'] = attributes
+            write_json(metadata, info)
+        if attributes:
+            media['video'] = attributes.copy()
+        if not self.library.ffmpeg or not attributes:
+            return  # Keep MP4-only publishing available without optional video tools.
+        thumbnail = metadata.with_suffix('.jpg')
+        if not thumbnail.is_file():
+            target = media['path'].with_suffix('.jpg')
+            result = self._run_media_tool([self.library.ffmpeg, '-nostdin', '-v', 'error', '-y',
+                '-i', str(media['path']), '-map', '0:v:0', '-frames:v', '1',
+                '-vf', 'scale=320:320:force_original_aspect_ratio=decrease', '-q:v', '3', str(target)], timeout=60)
+            if result.returncode or not target.is_file():
+                raise ValueError(f'{media["name"]}: не удалось подготовить миниатюру видео')
+            with Image.open(target) as image:
+                rgb = image.convert('RGB')
+            rgb.save(target, 'JPEG', quality=85)
+            if target.stat().st_size >= 200_000:
+                raise ValueError(f'{media["name"]}: миниатюра видео превышает лимит')
+            self._link_or_copy(target, thumbnail)
+        else:
+            target = media['path'].with_suffix('.jpg')
+            self._link_or_copy(thumbnail, target)
+        media['thumbnail'] = target
+
+    @staticmethod
+    def _video_fields(media, fields, files, index):
+        if media['kind'] != 'video':
+            return
+        fields.update(media.get('video', {}))
+        # Our encoded MP4s use +faststart; unchanged originals may not.
+        if media['converted']:
+            fields['supports_streaming'] = True
+        if media.get('thumbnail'):
+            name = f'thumbnail{index}'
+            fields['thumbnail'] = f'attach://{name}'
+            files[name] = media['thumbnail']
 
     def _remove_sent_cache(self, media, destination=None):
         needed_names = set()
@@ -871,6 +947,8 @@ class Publisher:
             selected = [p for p in self.job['_prepared'] if p['post']['id'] in ids]
             if any(not m['path'].is_file() for p in selected for m in p['media']):
                 raise ValueError('Подготовленный файл исчез. Повторите подготовку.')
+            if any(m.get('thumbnail') and not m['thumbnail'].is_file() for p in selected for m in p['media']):
+                raise ValueError('Миниатюра видео исчезла. Повторите подготовку.')
             for prepared in selected:
                 post = prepared['post']
                 limit = 1024 if post['photos'] else 4096
@@ -924,6 +1002,7 @@ class Publisher:
                     field = media[0]['kind']
                     params.update({field: 'attach://file0', 'caption': post['caption']})
                     files['file0'] = media[0]['path']
+                    self._video_fields(media[0], params, files, 0)
                 else:
                     method = 'sendMediaGroup'
                     params['media'] = []
@@ -933,6 +1012,7 @@ class Publisher:
                             entry['caption'] = post['caption']
                         params['media'].append(entry)
                         files[f'file{n}'] = m['path']
+                        self._video_fields(m, entry, files, n)
                 upload_started = None
                 def progress(sent, total):
                     nonlocal upload_started

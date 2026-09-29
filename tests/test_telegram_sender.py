@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -73,6 +74,82 @@ class PublisherTest(unittest.TestCase):
         self.publisher._prepare_media_file(source, dict(mode='local'), target)
         with Image.open(target) as image:
             self.assertEqual(image.size, (640, 480))
+
+    def test_video_metadata_rotation_and_failed_probe(self):
+        from types import SimpleNamespace
+        self.publisher.outbox.mkdir(exist_ok=True)
+        target = self.publisher.outbox / ('a' * 32 + '.mp4')
+        target.write_bytes(b'video')
+        metadata = self.publisher.media_cache / ('b' * 64 + '.json')
+        self.library.ffprobe = 'ffprobe'
+        self.library.ffmpeg = None
+        media = dict(path=target, name='portrait.mp4')
+        probe = dict(streams=[dict(codec_type='video', width=1920, height=1080,
+                     side_data_list=[dict(rotation=-90)])], format=dict(duration='26.11'))
+        with patch.object(self.publisher, '_run_media_tool', return_value=SimpleNamespace(returncode=0, stdout=json.dumps(probe))):
+            self.publisher._prepare_video_attributes(media, {}, metadata)
+        self.assertEqual(media['video'], dict(width=1080, height=1920, duration=26))
+        with patch.object(self.publisher, '_run_media_tool', return_value=SimpleNamespace(returncode=1, stdout=b'')):
+            with self.assertRaisesRegex(ValueError, 'размеры и длительность'):
+                self.publisher._prepare_video_attributes(media, {}, metadata)
+
+    def test_video_metadata_thumbnail_cache_and_single_and_album_send(self):
+        from PIL import Image
+        if not self.library.ffmpeg or not self.library.ffprobe:
+            self.skipTest('FFmpeg/FFprobe are optional and not installed')
+        source = self.root / 'video.mov'
+        shutil.copyfile(Path(__file__).parent / 'fixtures' / '03-motion.mov', source)
+        original = source.read_bytes()
+        self.library.refresh()
+        video_id = next(p['id'] for p in self.library.photos if p['kind'] == 'video')
+        photo_id = next(p['id'] for p in self.library.photos if p['kind'] == 'photo')
+        self.library.state['posts'] = [dict(id='one', title='Video', caption='', photos=[video_id]),
+                                       dict(id='two', title='Album', caption='Caption', photos=[photo_id, video_id])]
+        job = self.prepare()
+        self.assertEqual(job['status'], 'ready', job)
+        media = self.publisher.job['_prepared'][0]['media'][0]
+        payload = media['path'].read_bytes()
+        probe = json.loads(subprocess.check_output([self.library.ffprobe, '-v', 'error', '-show_streams',
+                                                   '-of', 'json', str(media['path'])]))
+        stream = next(s for s in probe['streams'] if s['codec_type'] == 'video')
+        expected = dict(width=stream['width'], height=stream['height'], duration=2)
+        self.assertEqual(media['video'], expected)
+        with Image.open(media['thumbnail']) as image:
+            self.assertEqual(image.format, 'JPEG')
+            self.assertLessEqual(max(image.size), 320)
+        self.assertLess(media['thumbnail'].stat().st_size, 200_000)
+        key = media['cache_key']
+        metadata = self.publisher.media_cache / (key + '.json')
+        thumbnail = metadata.with_suffix('.jpg')
+        # Simulate an old cache: preserve the MP4, remove only newly added metadata.
+        info = json.loads(metadata.read_text())
+        info.pop('video')
+        metadata.write_text(json.dumps(info))
+        thumbnail.unlink()
+        with patch.object(self.publisher, '_prepare_media_file', side_effect=AssertionError('Must not re-encode')):
+            restored = self.publisher._prepare_media(source, self.publisher.settings)
+        self.assertEqual(restored['video'], expected)
+        self.assertEqual(restored['path'].read_bytes(), payload)
+        with patch.object(self.publisher, '_run_media_tool', side_effect=AssertionError('Must reuse metadata and thumbnail')):
+            cached = self.publisher._prepare_media(source, self.publisher.settings)
+        self.assertEqual(cached['video'], expected)
+        self.publisher.send(job['id'])
+        self.assertEqual(self.wait()['status'], 'done')
+        single, album = self.fake.calls
+        self.assertEqual(single[0], 'sendVideo')
+        self.assertEqual(album[0], 'sendMediaGroup')
+        for fields, files, index in [(single[1], single[2], 0), (album[1]['media'][1], album[2], 1)]:
+            for name, value in expected.items():
+                self.assertEqual(fields[name], value)
+            self.assertTrue(fields['supports_streaming'])
+            self.assertEqual(fields['thumbnail'], f'attach://thumbnail{index}')
+            self.assertTrue(files[f'thumbnail{index}'].startswith(b'\xff\xd8'))
+            self.assertEqual(files[f'file{index}'], payload)
+        self.assertNotIn('width', album[1]['media'][0])
+        self.assertFalse(metadata.exists())
+        self.assertFalse(thumbnail.exists())
+        self.assertFalse(self.publisher.outbox.exists())
+        self.assertEqual(source.read_bytes(), original)
 
     def wait(self):
         deadline = time.monotonic() + 10
