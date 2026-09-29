@@ -165,7 +165,7 @@ function renderSidebar() {
   previews.refresh();
   captionCount();
 }
-function captionCount() { const length=currentPost()?.caption.length || 0; $('#captionCount').textContent=`${length} / 1024`; $('#captionCount').classList.toggle('over',length>1024); $('#nextPost').disabled=!currentPost() || emptyPost(currentPost()); }
+function captionCount() { const post=currentPost(), length=post?.caption.length || 0, limit=post?.photos.length?1024:4096; $('#captionCount').textContent=`${length} / ${limit}`; $('#captionCount').classList.toggle('over',length>limit); $('#nextPost').disabled=!post || emptyPost(post); }
 function renderPosts() {
   $('#postList').innerHTML=state.posts.map((p,n)=>`<article class="post-card ${p.id===state.active?'current':''}"><div class="post-card-head"><h3><span class="post-number">${String(n+1).padStart(2,'0')}</span>${esc(p.title || 'Без названия')}</h3><div class="post-actions"><button data-post-up="${p.id}" ${n===0?'disabled':''} aria-label="Переместить пост вверх">↑</button><button data-post-down="${p.id}" ${n===state.posts.length-1?'disabled':''} aria-label="Переместить пост вниз">↓</button><button data-edit="${p.id}">Открыть</button><button data-delete="${p.id}" aria-label="Удалить черновик">×</button></div></div><div class="post-strip">${p.photos.map(id=>`<button data-open="${id}"><img decoding="async" data-preview="${photoURL(id)}" alt="${esc(byId.get(id).name)}">${videoBadge(id)}</button>`).join('')}</div>${p.photos.length?'':'<div class="empty">Пока без файлов</div>'}<p class="post-caption">${esc(p.caption || 'Без подписи')}</p></article>`).join('');
   previews.refresh();
@@ -382,18 +382,18 @@ async function changeCache(clear) {
   }
 }
 async function exportPosts() {
-  if(!state.posts.some(p=>p.photos.length))return toast('Сначала выберите фото или видео для поста');
-  if(state.posts.some(p=>p.photos.length&&p.caption.length>1024))return toast('Сократите подписи до 1024 символов перед экспортом');
+  if(!state.posts.some(p=>!emptyPost(p)))return toast('Сначала добавьте фото, видео или текст в пост');
+  if(state.posts.some(p=>p.caption.length>(p.photos.length?1024:4096)))return toast('Сократите подписи до 1024 символов, текстовые посты — до 4096');
   $('#export').disabled=true;
   try {
     await flush();
-    $('#exportDialog').showModal();$('#exportTitle').textContent='Собираем папки…';$('#exportDescription').textContent='Копируем оригинальные файлы в порядке постов.';$('#exportPath').textContent='';$('#reveal').hidden=true;$('#exportProgress').value=0;
+    $('#exportDialog').showModal();$('#exportTitle').textContent='Собираем папки…';$('#exportDescription').textContent='Сохраняем посты по порядку: оригинальные файлы и текст.';$('#exportPath').textContent='';$('#reveal').hidden=true;$('#exportProgress').value=0;
     const result=await api('/api/export',{});exportId=result.id;
     for(;;) {
       const job=await api('/api/job/'+exportId);$('#exportProgress').max=job.total;$('#exportProgress').value=job.done;
-      $('#exportDescription').textContent=`Скопировано ${job.done} из ${job.total} оригиналов`;
+      $('#exportDescription').textContent=`Экспортировано постов: ${job.done} из ${job.total}`;
       if(job.status==='error')throw new Error(job.error);
-      if(job.status==='done') {$('#exportTitle').textContent='Посты готовы к отправке';$('#exportDescription').textContent='В каждой папке — оригинальные фото и видео с номерами. «Подпись.txt» создаётся только для непустой подписи. Проверьте порядок кадров при загрузке в Telegram.';$('#exportPath').textContent=job.path;$('#reveal').hidden=false;break;}
+      if(job.status==='done') {$('#exportTitle').textContent='Посты готовы к отправке';$('#exportDescription').textContent='В папках — оригинальные фото и видео с номерами и непустые подписи. Текстовые посты содержат только «Подпись.txt». Проверьте порядок кадров при загрузке в Telegram.';$('#exportPath').textContent=job.path;$('#reveal').hidden=false;break;}
       await new Promise(r=>setTimeout(r,500));
     }
   } catch(e) {toast(e.message);if($('#exportDialog').open){$('#exportTitle').textContent='Экспорт не завершён';$('#exportDescription').textContent=e.message;}}
@@ -412,7 +412,7 @@ async function refreshLibrary() {
     const previous=new Map(photos.map(p=>[p.id,p]));
     const data=await api('/api/refresh',{});
     photos=data.photos;byId=new Map(photos.map(p=>[p.id,p]));
-    previews.failed.clear();updateDays();render();
+    previews.failed.clear();largePreviews.failed.clear();updateDays();render();
     if(current) {
       const ids=tab==='posts'?state.posts.flatMap(p=>p.photos):visible.map(p=>p.id);
       viewerIds=[...new Set(ids.includes(current)?ids:[current,...ids])];renderViewer();

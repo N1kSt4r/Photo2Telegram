@@ -27,6 +27,12 @@ function telegramModeChanged(){
 }
 function telegramConfig(){return {mode:$('#telegramMode').value,endpoint:$('#telegramEndpoint').value,
   token:$('#telegramToken').value,channel:$('#telegramChannel').value,silent:$('#telegramSilent').checked};}
+function telegramSettingsChanged(){
+  const input=telegramConfig(), saved=telegramLastData?.settings||{};
+  return Boolean(input.token.trim()) || input.mode!==(saved.mode||'cloud') ||
+    input.channel.trim()!==(saved.channel||'') || input.silent!==Boolean(saved.silent) ||
+    (input.mode==='local'&&input.endpoint.trim().replace(/\/+$/,'')!==saved.endpoint);
+}
 async function saveTelegram(){
   const data=await telegramAPI('/api/telegram/settings',telegramConfig());
   $('#telegramToken').value='';$('#telegramToken').placeholder=data.has_token?'Токен сохранён локально; пустое поле оставляет его прежним':'Токен от @BotFather';
@@ -118,7 +124,7 @@ function renderTelegram(data){
     const firstBlocked=job.items.findIndex(p=>!['ready','cached','sent'].includes(p.status));
     $('#telegramPublishPrefix').disabled=busy||!job.items.slice(0,firstBlocked<0?job.items.length:firstBlocked).some(p=>['ready','cached'].includes(p.status));
 
-    $('#telegramSnapshot').hidden=true;$('#telegramCancel').hidden=!busy;
+    $('#telegramCancel').hidden=!busy;
     $('#telegramCancel').disabled=job.status==='cancelling';
     $('#telegramCancel').textContent=job.status==='cancelling'?'Останавливаем…':job.status==='sending'?'Остановить после текущего поста':'Остановить подготовку';
   }
@@ -169,6 +175,7 @@ $('#telegramPrepareAll').onclick=()=>prepareTelegram(true);
 async function sendTelegramSelection(ids){
   if(!ids.length)throw new Error('Выберите хотя бы один готовый пост.');
   await flush();
+  if(telegramSettingsChanged())throw new Error('Настройки отправки изменены. Нажмите «Проверить подключение», чтобы сохранить и проверить получателя перед отправкой.');
   const direct=telegramJobId&&telegramLastData.job.channel_status==='ready'&&!telegramLastData.job.items.some(p=>ids.includes(p.id)&&p.status==='cached');
   await telegramAPI(direct?'/api/telegram/send':'/api/telegram/send-ready',direct?{id:telegramJobId,ids}:{ids});
 }

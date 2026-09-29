@@ -134,6 +134,19 @@ test('large prefetch pauses on close and for cache clearing',async()=>{
   loader.setWindow('a',['b']);assert.equal(requests.length,1);
 });
 
+test('clearing a transient large-preview failure allows the same URL to load again',async()=>{
+  const {context}=setup();let attempts=0;
+  context.fetch=async()=>({ok:++attempts>1,blob:async()=>({})});
+  const loader=vm.runInContext('new LargePreviewLoader(()=>{})',context);
+  loader.setWindow('photo',[]);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(loader.failed.has('photo'),true);
+  loader.failed.clear();loader.setWindow('photo',[]);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(attempts,2);
+  assert.equal(loader.cache.has('photo'),true);
+});
+
 
 test('large viewer gets three prefetch slots plus a reserved current slot',async()=>{
   const {context,loader:thumbs,add,starts}=setup();

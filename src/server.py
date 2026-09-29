@@ -294,11 +294,11 @@ class Library:
 
     def export(self):
         with self.lock:
-            posts = json.loads(json.dumps([p for p in self.state['posts'] if p['photos']]))
+            posts = json.loads(json.dumps([p for p in self.state['posts'] if p['photos'] or p['caption'].strip()]))
             if not posts:
-                raise ValueError('Сначала добавьте фото или видео в пост')
-            if any(len(p['caption']) > 1024 for p in posts):
-                raise ValueError('Для экспорта сократите подписи до 1024 символов')
+                raise ValueError('Сначала добавьте фото, видео или текст в пост')
+            if any(len(p['caption'].encode('utf-16-le')) // 2 > (1024 if p['photos'] else 4096) for p in posts):
+                raise ValueError('Для экспорта сократите подписи до 1024 символов, текстовые посты — до 4096')
             missing = sorted({self.catalog[ident]['name'] for post in posts for ident in post['photos']
                               if ident not in self.files or not self.files[ident].is_file()})
             if missing:
@@ -307,7 +307,7 @@ class Library:
                 raise ValueError(f'В постах есть недоступные файлы: {names}{suffix}. Верните их и обновите библиотеку или уберите из постов.')
             export_files = dict(self.files)
             ident = uuid.uuid4().hex
-            job = dict(status='working', done=0, total=sum(len(p['photos']) for p in posts), path='')
+            job = dict(status='working', done=0, total=len(posts), path='')
             self.jobs[ident] = job
         def run():
             output = self.root / 'Посты для Telegram' / (datetime.now().strftime('%Y-%m-%d %H-%M-%S') + '-' + ident[:4])
@@ -324,12 +324,12 @@ class Library:
                         name = f'{i:02d} — {src.name}'
                         shutil.copy2(src, folder / name)
                         exported.append(name)
-                        job['done'] += 1
                     if post['caption'].strip():
                         (folder / 'Подпись.txt').write_text(post['caption'], encoding='utf-8')
                     manifest.append(dict(folder=folder.name, files=exported, caption=post['caption']))
+                    job['done'] += 1
                 atomic_json(output / 'Порядок постов.json', manifest)
-                (output / 'Как отправить.txt').write_text('Папки пронумерованы в порядке публикации.\nВ каждой папке выберите фотографии и видео, затем вставьте текст из файла «Подпись.txt», если он есть.\nФайлы — точные копии оригиналов. Номера в именах обозначают желаемый порядок; проверьте его в Telegram перед отправкой.\nДля HEIC способ отправки и отображение зависят от клиента Telegram.\n', encoding='utf-8')
+                (output / 'Как отправить.txt').write_text('Папки пронумерованы в порядке публикации.\nВ каждой папке выберите фотографии и видео, затем вставьте текст из файла «Подпись.txt», если он есть. Если в папке только «Подпись.txt», отправьте его содержимое отдельным текстовым сообщением.\nФайлы — точные копии оригиналов. Номера в именах обозначают желаемый порядок; проверьте его в Telegram перед отправкой.\nДля HEIC способ отправки и отображение зависят от клиента Telegram.\n', encoding='utf-8')
                 job.update(status='done', path=str(output))
             except Exception as e:
                 job.update(status='error', error=str(e), path=str(output))
@@ -348,6 +348,7 @@ class LibraryManager:
                          if self.registry_path.exists() else {})
         self.current = None
         self.libraries = {}
+        self.channel_checks = 0
         self.bot_api_container = BotAPIContainer(APP.parent)
         self.switch(root)
 
@@ -553,33 +554,53 @@ def handler_for(manager):
                 self.respond(500, {'error': str(e)})
 
         def do_POST(self):
-            with manager.lock:
-                self.handle_post()
-
-        def handle_post(self):
-            library = manager.current
-            if not self.valid_host():
-                return self.respond(403, {'error': 'Нет доступа'})
-            if not self.headers.get('X-Local-Token'):
-                return self.respond(403, {'error': 'Нет доступа'})
-            if self.headers.get('X-Local-Token') != library.token:
-                return self.respond(409, {'error': 'Библиотека изменена в другой вкладке. Обновите страницу.'})
             try:
+                if not self.valid_host() or not self.headers.get('X-Local-Token'):
+                    return self.respond(403, {'error': 'Нет доступа'})
                 size = int(self.headers.get('Content-Length', '0'))
-                if size > 4_000_000:
+                if not 0 <= size <= 4_000_000:
                     return self.respond(413, {'error': 'Слишком большой запрос'})
                 data = json.loads(self.rfile.read(size) or b'{}')
+                checking = self.path == '/api/telegram/check'
+                slow = checking or self.path in ('/api/refresh', '/api/cache/clear')
+                with manager.lock:
+                    library = manager.current
+                    if not self.valid_host() or not self.headers.get('X-Local-Token'):
+                        return self.respond(403, {'error': 'Нет доступа'})
+                    if self.headers.get('X-Local-Token') != library.token:
+                        return self.respond(409, {'error': 'Библиотека изменена в другой вкладке. Обновите страницу.'})
+                    if not slow:
+                        return self.handle_post(library, data)
+                    if checking:
+                        if manager.bot_api_container.busy():
+                            raise ValueError('Дождитесь завершения запуска или остановки Bot API')
+                        manager.channel_checks += 1
+                # Work on the authenticated library captured above. Slow local I/O
+                # and Telegram checks must not hold up saving or stopping a queue.
+                try:
+                    return self.handle_post(library, data)
+                finally:
+                    if checking:
+                        with manager.lock:
+                            manager.channel_checks -= 1
+            except (ValueError, TypeError) as error:
+                self.respond(400, {'error': str(error)})
+            except Exception as error:
+                self.respond(500, {'error': str(error)})
+
+        def handle_post(self, library, data):
+            try:
                 if self.path == '/api/telegram/status':
                     return self.respond(200, library.publisher.status())
                 if self.path == '/api/telegram/container/status':
                     return self.respond(200, manager.bot_api_container.status())
                 if self.path == '/api/telegram/container/credentials':
-                    if any(item.publisher.busy() for item in manager.libraries.values()):
-                        raise ValueError('Дождитесь завершения очереди Telegram перед изменением ключей Bot API')
+                    if manager.channel_checks or any(item.publisher.busy() for item in manager.libraries.values()):
+                        raise ValueError('Дождитесь завершения проверки канала и очереди Telegram перед изменением ключей Bot API')
                     return self.respond(200, manager.bot_api_container.save_credentials(data))
                 if self.path == '/api/telegram/container/action':
-                    if any(item.publisher.busy() for item in manager.libraries.values()):
-                        raise ValueError('Сначала остановите очередь Telegram и дождитесь окончания текущего поста или подготовки')
+                    if manager.channel_checks or any(item.publisher.busy() for item in manager.libraries.values()):
+                        raise ValueError('Дождитесь проверки канала; остановите очередь Telegram и дождитесь окончания текущего поста или подготовки')
                     return self.respond(200, manager.bot_api_container.action(data.get('action')))
                 if self.path in ('/api/telegram/prepare', '/api/telegram/send', '/api/telegram/send-ready', '/api/telegram/check') and manager.bot_api_container.busy():
                     raise ValueError('Дождитесь завершения запуска или остановки Bot API')

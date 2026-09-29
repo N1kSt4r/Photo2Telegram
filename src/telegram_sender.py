@@ -203,6 +203,7 @@ class Publisher:
         self.outbox = library.data / 'telegram-outbox'
         if self.outbox.exists():
             shutil.rmtree(self.outbox)
+        self._prune_media_cache()
 
     @property
     def settings(self):
@@ -477,6 +478,7 @@ class Publisher:
             if self.job:
                 self.status()
             self._cleanup()
+            self._prune_media_cache()
             self.cancelled.clear()
             known = {item['id']: item for item in self._overview()['items']}
             initial_items = []
@@ -521,7 +523,8 @@ class Publisher:
                             summary['files'] = self._sent_files(post, previous)
                             continue
                         if previous and previous['status'] in ('unknown', 'sending'):
-                            raise ValueError(f'Проверьте результат прошлой отправки «{post["title"]}» в истории, прежде чем продолжить')
+                            summary.update(status='unknown', error=previous.get('error', 'Проверьте результат прошлой отправки в канале.'))
+                            continue
                         if len(post['photos']) > 10:
                             raise ValueError('В одном посте допускается не больше 10 файлов')
                         limit = 1024 if post['photos'] else 4096
@@ -599,7 +602,7 @@ class Publisher:
                 if not prepared:
                     self._cleanup()
                 return
-            errors = [item for item in summaries if item['status'] == 'error']
+            errors = [item for item in summaries if item['status'] in ('error', 'unknown')]
             message = f'Готово: {len(prepared)} · ошибок: {len(errors)}. Выберите посты для публикации'
             if not prepared:
                 message = errors[0]['error'] if errors else 'Все выбранные посты уже отправлены'
@@ -656,6 +659,31 @@ class Publisher:
         except OSError:
             return False
 
+    def _prune_media_cache(self):
+        """Discard obsolete conversions while keeping drafts and uncertain sends."""
+        settings = self.settings
+        if 'mode' not in settings:
+            return
+        keep = set()
+        with self.library.lock:
+            ids = {ident for post in self.library.state['posts'] for ident in post['photos']}
+            for ident in ids:
+                source = self.library.files.get(ident)
+                if source:
+                    try:
+                        keep.add(self._media_cache_key(source, settings))
+                    except OSError:
+                        pass
+        for record in self.journal.values():
+            if record['status'] in ('unknown', 'sending'):
+                keep.update(record.get('cache_keys', []))
+        for path in self.media_cache.iterdir():
+            if re.fullmatch(r'[a-f0-9]{64}\.(?:jpg|mp4|json|tmp)', path.name) and path.stem not in keep:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
     @staticmethod
     def _link_or_copy(source, target):
         try:
@@ -701,9 +729,9 @@ class Publisher:
                 target.unlink(missing_ok=True)
                 raise
 
-    def _remove_sent_cache(self, media):
+    def _remove_sent_cache(self, media, destination=None):
         needed_names = set()
-        destination = (self.job or {}).get('destination')
+        destination = destination or (self.job or {}).get('destination')
         if destination:
             with self.library.lock:
                 for post in self.library.state['posts']:
@@ -967,8 +995,17 @@ class Publisher:
                 raise ValueError('Не найден пост с неопределённым результатом')
             self._record(key, dict(record, status='sent' if resolution == 'sent' else 'retry',
                                    error='', manually_checked=True))
+            if self.job:
+                # Unknown items can be present without a prepared copy after a restart
+                # or another preparation. Let the disk overview restore their state.
+                self.job['items'] = [item for item in self.job['items'] if item['id'] != record['post_id'] or item['status'] != 'unknown']
+            self._display_items.pop(record['post_id'], None)
             if resolution == 'sent':
-                self._remove_sent_cache([{'cache_key': key} for key in record.get('cache_keys', [])])
+                files = record.get('files', [])
+                self._remove_sent_cache([
+                    dict(cache_key=cache_key, name=files[index].get('name') if index < len(files) else None)
+                    for index, cache_key in enumerate(record.get('cache_keys', []))
+                ], destination=record)
             return {'ok': True}
 
     def _safe_error(self, error):

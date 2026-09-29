@@ -41,3 +41,15 @@ test('cleanup leaves all photo and caption content intact and is idempotent',()=
   assert.deepEqual(app.posts(),[photo,text]);
   assert.equal(app.run('removeEmptyPosts()'),false);
 });
+
+test('library refresh clears failures for thumbnails and large previews',async()=>{
+  const app=setup([post('current')],'current');
+  app.run(`
+    globalThis.previews={failed:new Set(['thumbnail'])};
+    largePreviews.failed=new Set(['large']);
+    api=async()=>({photos:[]});flush=async()=>{};updateDays=()=>{};
+  `);
+  await app.run('refreshLibrary()');
+  assert.equal(app.run('previews.failed.size'),0);
+  assert.equal(app.run('largePreviews.failed.size'),0);
+});

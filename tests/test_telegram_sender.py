@@ -577,6 +577,54 @@ class PublisherTest(unittest.TestCase):
         restored = Publisher(self.library, self.publisher.save_jpeg)
         self.assertEqual(restored.journal['key']['status'], 'unknown')
 
+    def test_repreparing_unknown_keeps_resolution_available(self):
+        job = self.prepare()
+        self.fake.fail = TelegramError('Connection lost', uncertain=True)
+        self.publisher.send(job['id']); self.wait()
+        key = next(iter(self.publisher.journal))
+        for resolution in ('retry', 'sent'):
+            with self.subTest(resolution=resolution):
+                self.publisher._record(key, dict(self.publisher.journal[key], status='unknown'))
+                job = self.prepare()
+                item = job['items'][0]
+                self.assertEqual(item['status'], 'unknown')
+                self.assertEqual(item['resolve_key'], key)
+                self.publisher.resolve(key, resolution)
+                item = self.publisher.status()['job']['items'][0]
+                self.assertEqual(item['status'], 'cached' if resolution == 'retry' else 'sent')
+        self.assertEqual(len(self.fake.calls), 1)
+
+    def test_obsolete_cache_removed_but_unknown_evidence_and_drafts_retained(self):
+        job = self.prepare()
+        original = set(self.publisher.media_cache.glob('*.json'))
+        source = next(iter(self.library.files.values()))
+        stat = source.stat()
+        os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1000000))
+        self.prepare()
+        current = set(self.publisher.media_cache.glob('*.json'))
+        self.assertEqual(len(current), len(original))
+        self.assertNotEqual(current, original)
+        self.fake.fail = TelegramError('Connection lost', uncertain=True)
+        self.publisher.send(self.publisher.job['id']); self.wait()
+        self.library.state['posts'] = []
+        restored = Publisher(self.library, self.publisher.save_jpeg)
+        self.assertEqual(set(restored.media_cache.glob('*.json')), current)
+        key = next(iter(restored.journal))
+        restored.resolve(key, 'retry')
+        restarted = Publisher(self.library, restored.save_jpeg)
+        self.assertFalse(list(restarted.media_cache.iterdir()))
+
+    def test_manual_confirmation_after_restart_keeps_cache_needed_by_another_post(self):
+        self.library.state['posts'].append(dict(self.library.state['posts'][0], id='two'))
+        job = self.prepare()
+        self.fake.fail = TelegramError('Connection lost', uncertain=True)
+        self.publisher.send(job['id'], ['one']); self.wait()
+        restored = Publisher(self.library, self.publisher.save_jpeg)
+        key = next(iter(restored.journal))
+        restored.resolve(key, 'sent')
+        items = restored.status()['job']['items']
+        self.assertEqual([item['status'] for item in items], ['sent', 'cached'])
+
     def test_known_rejection_cancel_and_validation(self):
         job = self.prepare()
         self.publisher.save_settings(dict(token=TOKEN, channel='@test_channel', mode='cloud'))

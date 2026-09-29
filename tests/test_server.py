@@ -84,6 +84,26 @@ class LibraryTest(unittest.TestCase):
         self.assertEqual(hashlib.sha256(exported.read_bytes()).digest(), hashlib.sha256(source.read_bytes()).digest())
         self.assertEqual(Library(self.root, self.data).state, state)
 
+    def test_export_includes_text_posts_in_order_and_skips_empty_drafts(self):
+        for text_only in (False, True):
+            with self.subTest(text_only=text_only):
+                text = dict(id='text', title='Текст', caption='Я' * 4096, photos=[])
+                posts = [text] if text_only else [self.project()['posts'][0], text]
+                self.library.state['posts'] = posts + [dict(id='empty', title='Empty', caption='  ', photos=[])]
+                job = self.library.jobs[self.library.export()]
+                deadline = time.monotonic() + 10
+                while job['status'] == 'working' and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertEqual(job['status'], 'done', job)
+                self.assertEqual(job['done'], len(posts))
+                self.assertEqual(job['total'], len(posts))
+                output = Path(job['path'])
+                manifest = json.loads((output / 'Порядок постов.json').read_text(encoding='utf-8'))
+                self.assertEqual([p['caption'] for p in manifest], [p['caption'] for p in posts])
+                text_folder = output / manifest[-1]['folder']
+                self.assertEqual([p.name for p in text_folder.iterdir()], ['Подпись.txt'])
+                self.assertEqual((text_folder / 'Подпись.txt').read_text(encoding='utf-8'), text['caption'])
+
     def test_video_preview_and_duration(self):
         target = self.root / '2026-09-20 07-51-05_video.MOV'
         shutil.copy2(FIXTURES / '03-motion.mov', target)

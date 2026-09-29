@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -127,6 +128,42 @@ class FolderSelectionTest(unittest.TestCase):
         self.assertEqual(error.exception.code, 409)
         with request(f'/photo/{ident}?project={new["project"]}') as response:
             self.assertEqual(response.read()[:2], b'\xff\xd8')
+
+    def test_channel_check_does_not_block_saving_status_or_cancel(self):
+        library = self.manager.current
+        entered, release = threading.Event(), threading.Event()
+        def check():
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError('Test check was not released')
+            return {'ok': True}
+        server = LocalHTTPServer(('127.0.0.1', 0), handler_for(self.manager))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        def request(path, value):
+            req = Request(f'http://127.0.0.1:{server.server_port}'+path,
+                          data=json.dumps(value).encode(), headers={'X-Local-Token': library.token})
+            with urlopen(req, timeout=3) as response:
+                return json.load(response)
+        try:
+            with patch.object(library.publisher, 'check', side_effect=check), ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(request, '/api/telegram/check', {})
+                try:
+                    self.assertTrue(entered.wait(2))
+                    self.assertFalse(request('/api/telegram/status', {})['busy'])
+                    state = json.loads(json.dumps(library.state))
+                    self.assertEqual(request('/api/state', state)['revision'], 1)
+                    self.assertTrue(request('/api/telegram/cancel', {})['ok'])
+                    with self.assertRaises(HTTPError) as error:
+                        request('/api/telegram/container/action', {'action': 'stop'})
+                    self.assertEqual(error.exception.code, 400)
+                finally:
+                    release.set()
+                self.assertTrue(future.result()['ok'])
+                self.assertEqual(self.manager.channel_checks, 0)
+        finally:
+            release.set()
+            server.shutdown(); server.server_close(); thread.join(5)
 
 
 class DefaultFolderTest(unittest.TestCase):
