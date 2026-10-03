@@ -109,3 +109,19 @@ test('connection details survive polling without preparation and hide after chan
   app.node('#telegramChannel').value='@other';app.render();
   assert.equal(app.node('#telegramDestination').textContent,'');
 });
+
+test('channel discovery shows code and applies a found channel only once',()=>{
+  const app=setup();
+  app.run("data.discovery={id:'pair',status:'waiting',code:'abcdefghijklmnop',bot:'bot',expires_at:Date.now()/1000+300,message:'Wait'};data.busy=true;renderTelegram(data)");
+  assert.equal(app.node('#telegramDiscoveryCode').value,'abcdefghijklmnop');
+  assert.equal(app.node('#telegramDiscoveryCodeRow').hidden,false);
+  assert.equal(app.node('#telegramConfig').disabled,true);
+  assert.equal(app.node('#telegramDiscoveryCancel').hidden,false);
+  app.run("data.settings.channel='-100123';data.busy=false;data.discovery={id:'pair',status:'connected',message:'Удалите сообщение вручную',destination:{chat_id:-100123,channel:'Found',bot:'bot'}};renderTelegram(data)");
+  assert.equal(app.node('#telegramChannel').value,'-100123');
+  assert.equal(app.node('#telegramDiscoveryCodeRow').hidden,true);
+  assert.equal(app.node('#telegramDiscoveryCancel').hidden,true);
+  assert.match(app.node('#telegramDiscoveryMessage').textContent,/вручную/);
+  app.node('#telegramChannel').value='@manual';app.run('renderTelegram(data)');
+  assert.equal(app.node('#telegramChannel').value,'@manual');
+});

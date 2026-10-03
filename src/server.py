@@ -633,6 +633,12 @@ def handler_for(manager):
 
         def handle_post(self, library, data):
             try:
+                if self.path == '/api/telegram/discover':
+                    if manager.bot_api_container.busy():
+                        raise ValueError('Дождитесь запуска или остановки Bot API')
+                    return self.respond(200, library.publisher.discover_channel(data))
+                if self.path == '/api/telegram/discover/cancel':
+                    return self.respond(200, library.publisher.cancel_discovery())
                 if self.path == '/api/telegram/status':
                     return self.respond(200, library.publisher.status())
                 if self.path == '/api/telegram/container/status':

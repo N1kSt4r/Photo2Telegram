@@ -20,9 +20,11 @@ from PIL import Image
 
 
 if __package__:
+    from .channel_discovery import ChannelDiscovery
     from .telegram_credentials import TelegramCredentials
     from .generated_storage import prepared_paths, file_stats
 else:
+    from channel_discovery import ChannelDiscovery
     from telegram_credentials import TelegramCredentials
     from generated_storage import prepared_paths, file_stats
 
@@ -187,6 +189,7 @@ class Publisher:
         self.journal = load_json(self.journal_path, {})
         self.job = None
         self._working = False
+        self.discovery = ChannelDiscovery(self)
         self.cancelled = threading.Event()
         self.client_factory = BotClient
         self._checked = None
@@ -214,7 +217,7 @@ class Publisher:
         return {**{k: v for k, v in self._settings.items() if k != '_token_key'}, 'token': self.credentials.read().get(self.token_key, '')}
 
     def busy(self):
-        return self._working
+        return self._working or self.discovery.active
 
     def _storage_paths(self):
         return (prepared_paths(self.media_cache, r'[a-f0-9]{64}\.(?:jpg|mp4|json|tmp)') +
@@ -238,9 +241,9 @@ class Publisher:
         with self.lock:
             return {**{k: v for k, v in self.settings.items() if k != 'token'}, 'has_token': bool(self.settings.get('token'))}
 
-    def save_settings(self, value):
+    def save_settings(self, value, *, _pairing=False):
         with self.lock:
-            if self.busy():
+            if self._working or (self.discovery.active and not _pairing):
                 raise ValueError('Сначала завершите или отмените очередь отправки')
             settings = validated_settings(value, self.settings)
             previous = self.settings
@@ -255,6 +258,17 @@ class Publisher:
                 self._cleanup()
             self._settings = local_settings
             return self.public_settings()
+
+    def discover_channel(self, value):
+        with self.lock:
+            if self.busy():
+                raise ValueError('Дождитесь завершения текущей операции или остановите её')
+            settings = validated_settings(dict(value, channel='@pending'), self.settings)
+            return self.discovery.start(settings)
+
+    def cancel_discovery(self):
+        with self.lock:
+            return self.discovery.cancel()
 
     def check(self):
         with self.lock:
@@ -473,7 +487,7 @@ class Publisher:
                 job['can_resume'] = not self._working and bool((self.job or {}).get('_prepared')) and any(
                     self.journal.get(p['key'], {}).get('status') != 'sent' for p in self.job['_prepared'])
                 job['sent'] = sum(item['status'] == 'sent' for item in job['items'])
-            return dict(settings=self.public_settings(), job=job or None, busy=self.busy(),
+            return dict(settings=self.public_settings(), job=job or None, busy=self.busy(), discovery=self.discovery.public(),
                         history=[dict(record, key=key) for key, record in self.journal.items()])
 
     def _update(self, **values):
@@ -978,7 +992,7 @@ class Publisher:
             self._sync_drafts()
             if self.job and self.job.get('channel_status') != 'ready':
                 raise ValueError('Сначала проверьте подключение к каналу. Готовые файлы сохранены.')
-            if self._working or not self.job or self.job['id'] != ident or self.job['status'] not in ('ready', 'error', 'cancelled', 'done'):
+            if self.busy() or not self.job or self.job['id'] != ident or self.job['status'] not in ('ready', 'error', 'cancelled', 'done'):
                 raise ValueError('Сначала подготовьте и проверьте посты')
             ready_ids = {p['post']['id'] for p in self.job.get('_prepared', [])
                          if self.journal.get(p['key'], {}).get('status') not in ('sent', 'unknown', 'sending')}

@@ -156,3 +156,11 @@ button.telegram-media-open{border:0;padding:0;border-radius:0;background:transpa
 }
 
 #muteVideo[aria-pressed="true"] { background:#324e3d; border-color:#61836b; color:#e0f0e3; }
+
+#telegramDiscovery { margin:18px 0; padding:18px; border:1px solid var(--line); border-radius:12px; background:var(--paper); }
+#telegramDiscoveryMessage { margin:10px 0; }
+#telegramDiscoveryCodeRow { display:flex; align-items:center; gap:12px; }
+#telegramDiscoveryCodeRow[hidden] { display:none; }
+#telegramDiscoveryCode { width:100%; min-width:0; padding:12px; border:1px solid var(--line); border-radius:8px; background:white; color:var(--ink); font-family:monospace; font-size:17px; letter-spacing:1px; }
+#telegramDiscoveryHint { display:block; margin:12px 0; color:var(--muted); line-height:1.5; }
+@media(max-width:560px){#telegramDiscoveryCodeRow{flex-wrap:wrap;}#telegramDiscoveryCodeRow button{width:100%;}}

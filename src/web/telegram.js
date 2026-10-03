@@ -3,6 +3,7 @@ let telegramTimer=null, telegramJobId=null, telegramSettingsLoaded=false, telegr
 let telegramSelectionScope=null, telegramSelectionDefault=null;
 const telegramSelection=new Map();
 let telegramConnection=null, telegramConnectionError='';
+let telegramDiscoveryHandled=null;
 const telegramLabels={cached:'Готов в кэше',sending:'Отправляется',sent:'Отправлен',unknown:'Результат неизвестен',error:'Ошибка',retry:'Повтор разрешён'};
 async function telegramAPI(path,data){
   const controller=new AbortController();
@@ -88,9 +89,15 @@ function renderTelegram(data){
     for(const input of document.querySelectorAll('[data-telegram-post]'))telegramSelection.set(input.dataset.telegramPost,input.checked);
   }
   telegramLastData=data;
+  if(data.discovery?.status==='connected' && telegramDiscoveryHandled!==data.discovery.id){
+    telegramDiscoveryHandled=data.discovery.id;telegramSettingsLoaded=false;
+    telegramConnection=data.discovery.destination;telegramConnectionError='';
+  }
+  renderTelegramDiscovery(data.discovery);
+
   if(!telegramSettingsLoaded){
     const settings=data.settings;
-    if(data.busy)$('#telegramMode').value=data.job?.mode||settings.mode||'cloud';
+    if(data.busy)$('#telegramMode').value=data.discovery?.mode||data.job?.mode||settings.mode||'cloud';
     $('#telegramEndpoint').value=settings.endpoint&&settings.mode==='local'?settings.endpoint:'http://127.0.0.1:8081';
     $('#telegramChannel').value=settings.channel||'';$('#telegramSilent').checked=Boolean(settings.silent);
     $('#telegramToken').value='';$('#telegramToken').placeholder=settings.has_token?'Токен сохранён локально; пустое поле оставляет его прежним':'Токен от @BotFather';
@@ -318,3 +325,26 @@ $('#telegramApiSave').onclick=()=>telegramAction(async()=>{
   $('#telegramApiId').value='';$('#telegramApiHash').value='';
   $('#telegramNotice').textContent='Ключи Bot API сохранены локально.';
 });
+
+function renderTelegramDiscovery(discovery){
+  $('#telegramDiscovery').hidden=!discovery;
+  if(!discovery)return;
+  $('#telegramDiscoveryMessage').textContent=discovery.message;
+  const waiting=discovery.status==='waiting';
+  $('#telegramDiscoveryCodeRow').hidden=!waiting;
+  if($('#telegramDiscoveryCode').value!==(waiting?discovery.code:''))$('#telegramDiscoveryCopy').textContent='Скопировать';
+  $('#telegramDiscoveryCode').value=waiting?discovery.code:'';
+  $('#telegramDiscoveryHint').textContent=waiting?`Бот @${discovery.bot}. Код действует ещё ${Math.max(0,Math.ceil((discovery.expires_at*1000-Date.now())/1000))} с. Опубликуйте только код, без подписи и других слов.`:'';
+  $('#telegramDiscoveryCancel').hidden=!['starting','waiting','checking','cancelling'].includes(discovery.status);
+  $('#telegramDiscoveryCancel').disabled=discovery.status==='cancelling';
+}
+$('#telegramDiscover').onclick=()=>telegramAction(async()=>{
+  renderTelegramDiscovery(await telegramAPI('/api/telegram/discover',telegramConfig()));
+});
+$('#telegramDiscoveryCancel').onclick=()=>telegramAction(async()=>{
+  renderTelegramDiscovery(await telegramAPI('/api/telegram/discover/cancel',{}));
+});
+$('#telegramDiscoveryCopy').onclick=async()=>{
+  try{await navigator.clipboard.writeText($('#telegramDiscoveryCode').value);$('#telegramDiscoveryCopy').textContent='Скопировано';}
+  catch{$('#telegramDiscoveryCode').select();$('#telegramDiscoveryHint').textContent='Код выделен. Скопируйте его через Ctrl+C или ⌘C.';}
+};
