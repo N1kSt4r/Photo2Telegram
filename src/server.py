@@ -233,6 +233,11 @@ class Library:
                 raise ValueError('Некорректное название')
         if any(not isinstance(i, str) or i not in self.catalog for i in hidden):
             raise ValueError('Неизвестные скрытые файлы')
+        muted = value.get('mutedVideos', {})
+        if (not isinstance(muted, dict) or len(muted) > 10000 or
+                any(i not in self.catalog or self.catalog[i].get('kind') != 'video' or enabled is not True
+                    for i, enabled in muted.items())):
+            raise ValueError('Некорректный список видео без звука')
         if value.get('active') is not None and value['active'] not in ids:
             raise ValueError('Неизвестный текущий пост')
 

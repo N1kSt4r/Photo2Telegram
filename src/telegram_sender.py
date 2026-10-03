@@ -386,7 +386,7 @@ class Publisher:
         with self.library.lock:
             ids = {p['id'] for p in self.job.get('_posts', [])}
             posts = [copy.deepcopy(p) for p in self.library.state['posts'] if p['id'] in ids]
-        signature = json.dumps(posts, sort_keys=True)
+        signature = json.dumps([posts, self.library.state.get('mutedVideos', {})], sort_keys=True)
         if signature == self.job.get('_draft_signature'):
             return
         available = self.job.setdefault('_available', {})
@@ -542,7 +542,7 @@ class Publisher:
                 initial_items.append(item)
             self.job = dict(id=uuid.uuid4().hex, status='preparing', done=0, total=len(posts),
                             message='Проверяем канал и готовим файлы…', channel_status='checking', channel_error='', items=initial_items, skipped=0,
-                            _settings=settings, _posts=posts, _files=files, _cache_only=cache_only, _send_after=send_after, _draft_signature=json.dumps(posts, sort_keys=True))
+                            _settings=settings, _posts=posts, _files=files, _cache_only=cache_only, _send_after=send_after, _draft_signature=json.dumps([posts, self.library.state.get('mutedVideos', {})], sort_keys=True))
             self._working = True
             threading.Thread(target=self._prepare, daemon=True).start()
             return {'id': self.job['id']}
@@ -699,10 +699,16 @@ class Publisher:
             return None
         return path if path.is_file() and not path.is_symlink() else None
 
+    def _video_muted(self, source):
+        ident = hashlib.sha256(source.name.encode()).hexdigest()[:20]
+        return self.library.state.get('mutedVideos', {}).get(ident, False)
+
     def _media_cache_key(self, source, settings):
         stat = source.stat()
         value = [str(source.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
                  settings['mode'], self.library.ffmpeg, self.library.ffprobe, ('jpeg2560-q85-mp4-v1' if source.suffix.lower() in {'.mov', '.mp4', '.m4v', '.webm'} else 'jpeg2560-q95-420-v4')]
+        if settings.get('_mute_video', self._video_muted(source)):
+            value.append('no-audio-v1')
         return hashlib.sha256(json.dumps(value).encode()).hexdigest()
 
     def _has_media_cache(self, source, settings):
@@ -745,7 +751,8 @@ class Publisher:
             shutil.copyfile(source, target)
 
     def _prepare_media(self, source, settings):
-        key = self._media_cache_key(source, settings)
+        media_settings = dict(settings, _mute_video=self._video_muted(source))
+        key = self._media_cache_key(source, media_settings)
         with self.lock:
             lock = self._cache_locks.setdefault(key, threading.Lock())
         with lock:
@@ -767,14 +774,16 @@ class Publisher:
                                   converted=info['converted'], cached=True, cache_key=key)
                     if video:
                         self._prepare_video_attributes(result, info, metadata)
+                    if key != self._media_cache_key(source, settings):
+                        raise ValueError(f'{source.name}: исходник или настройка звука изменились. Повторите подготовку.')
                     return result
                 if self.cancelled.is_set():
                     raise ValueError('Подготовка отменена')
                 if (self.job or {}).get('_cache_only'):
                     raise ValueError(f'{source.name}: готовый файл отсутствует или устарел. Повторите подготовку.')
-                result = self._prepare_media_file(source, settings, target)
+                result = self._prepare_media_file(source, media_settings, target)
                 if key != self._media_cache_key(source, settings):
-                    raise ValueError(f'{source.name}: исходник изменился во время подготовки')
+                    raise ValueError(f'{source.name}: исходник или настройка звука изменились. Повторите подготовку.')
                 # Metadata is the commit marker. Never reuse an unfinished file.
                 metadata.unlink(missing_ok=True)
                 cached.unlink(missing_ok=True)
@@ -904,6 +913,9 @@ class Publisher:
             if target.stat().st_size > 10_000_000:
                 raise ValueError(f'{source.name}: подготовленное фото превышает 10 МБ')
         else:
+            muted = settings.get('_mute_video', self._video_muted(source))
+            if muted and not self.library.ffmpeg:
+                raise ValueError(f'{source.name}: для удаления звука нужен FFmpeg')
             compatible = source.suffix.lower() == '.mp4'
             probe = self.library.ffprobe
             if probe:
@@ -913,18 +925,24 @@ class Publisher:
                 streams = metadata.get('streams', [])
                 videos = [s for s in streams if s.get('codec_type') == 'video']
                 audio = [s for s in streams if s.get('codec_type') == 'audio']
-                compatible = (compatible and bool(videos) and videos[0].get('codec_name') == 'h264'
-                              and all(s.get('codec_name') == 'aac' for s in audio))
-            if compatible:
+                compatible = ((compatible or muted) and bool(videos) and videos[0].get('codec_name') == 'h264'
+                              and (muted or all(s.get('codec_name') == 'aac' for s in audio)))
+            if compatible and muted:
+                result = self._run_media_tool([self.library.ffmpeg, '-nostdin', '-v', 'error', '-y', '-i', str(source),
+                    '-map', '0:v:0', '-c:v', 'copy', '-an', '-movflags', '+faststart', str(target)], timeout=1800)
+                if result.returncode:
+                    raise ValueError(f'{source.name}: FFmpeg не смог удалить звук')
+            elif compatible:
                 shutil.copyfile(source, target)
                 converted = False
             else:
                 if not self.library.ffmpeg:
                     raise ValueError(f'{source.name}: для подготовки этого видео нужен FFmpeg. Используйте MP4 или установите FFmpeg.')
+                audio_args = ['-an'] if muted else ['-map', '0:a:0?', '-c:a', 'aac']
                 result = self._run_media_tool([self.library.ffmpeg, '-nostdin', '-v', 'error', '-y', '-i', str(source),
-                                         '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', 'fast',
+                                         '-map', '0:v:0', '-c:v', 'libx264', '-preset', 'fast',
                                          '-crf', '20', '-pix_fmt', 'yuv420p', '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
-                                         '-c:a', 'aac', '-movflags', '+faststart', str(target)], timeout=1800)
+                                         *audio_args, '-movflags', '+faststart', str(target)], timeout=1800)
                 if result.returncode:
                     raise ValueError(f'{source.name}: FFmpeg не смог подготовить MP4')
             limit = 2_000_000_000 if settings['mode'] == 'local' else 50_000_000

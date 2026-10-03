@@ -78,7 +78,7 @@ function durationLabel(seconds) {
   const n=Math.max(0,Math.round(seconds)), h=Math.floor(n/3600), m=Math.floor(n/60)%60, sec=String(n%60).padStart(2,'0');
   return h ? `${h}:${String(m).padStart(2,'0')}:${sec}` : `${m}:${sec}`;
 }
-function videoBadge(id) {const p=byId.get(id);if(p?.missing)return '<span class="missing-badge">Недоступен</span>';return p?.kind==='video'?`<span class="video-badge">▶ ${durationLabel(p.duration)}</span>`:'';}
+function videoBadge(id) {const p=byId.get(id);if(p?.missing)return '<span class="missing-badge">Недоступен</span>';return p?.kind==='video'?`<span class="video-badge">▶ ${durationLabel(p.duration)}${state.mutedVideos?.[id]?' · 🔇':''}</span>`:'';}
 const dayFormat = new Intl.DateTimeFormat('ru', {day:'numeric',month:'long',weekday:'long'});
 function dateLabel(date) { if(!date)return 'Дата неизвестна';return dayFormat.format(new Date(date + 'T12:00:00')); }
 function toast(message) { $('#toast').textContent=message; $('#toast').hidden=false; clearTimeout(toastTimer); toastTimer=setTimeout(()=>$('#toast').hidden=true,4500); }
@@ -228,9 +228,14 @@ function renderViewer() {
   img.alt=p.name;
   prepareLargePreviews();
   $('#makeAvatar').hidden=p.kind==='video'||p.missing;
+  const muted=!!state.mutedVideos?.[current];
+  $('#muteVideo').hidden=!isVideo;
+  $('#muteVideo').textContent=muted?'✓ Без звука':'Отключить звук';
+  $('#muteVideo').setAttribute('aria-pressed',String(muted));
+  if(isVideo) video.muted=muted;
   $('#viewerName').textContent=p.name;
   const used=usedIn(current).map(x=>x.title || 'Без названия');
-  $('#viewerInfo').textContent=`${dateLabel(p.date.slice(0,10))} · ${p.date.slice(11,16)}${isVideo?' · ▶ '+durationLabel(p.duration):''}${used.length?' · В постах: '+used.join(', '):''}${p.dateSource==='file'?' · Дата изменения файла':''}`;
+  $('#viewerInfo').textContent=`${dateLabel(p.date.slice(0,10))} · ${p.date.slice(11,16)}${isVideo?' · ▶ '+durationLabel(p.duration):''}${used.length?' · В постах: '+used.join(', '):''}${p.dateSource==='file'?' · Дата изменения файла':''}${isVideo&&muted?' · Для Telegram: без звука':''}`;
   const i=viewerIds.indexOf(current); $('#viewerPosition').textContent=`${i+1} / ${viewerIds.length}`;
   $('#previous').disabled=i<=0; $('#following').disabled=i>=viewerIds.length-1;
   const chosen=currentPost().photos.includes(current);
@@ -263,6 +268,13 @@ function bind() {
   $('#title').oninput=e=>{currentPost().title=e.target.value;const option=$('#postSelect').selectedOptions[0];if(option)option.textContent=`${state.posts.indexOf(currentPost())+1}. ${e.target.value || 'Без названия'} · ${currentPost().photos.length} файлов`;changed();if(tab==='posts')renderPosts();};
   $('#caption').oninput=e=>{currentPost().caption=e.target.value;captionCount();changed();if(tab==='posts')renderPosts();};
   $('#day').onchange=renderGallery;$('#unused').onchange=renderGallery;
+  $('#muteVideo').onclick=()=>{
+    if(byId.get(current)?.kind!=='video')return;
+    state.mutedVideos ||= {};
+    if(state.mutedVideos[current])delete state.mutedVideos[current];
+    else state.mutedVideos[current]=true;
+    changed();render();
+  };
   $('#closeViewer').onclick=closeViewer;$('#previous').onclick=()=>move(-1);$('#following').onclick=()=>move(1);$('#pickPhoto').onclick=()=>pick(current);$('#hidePhoto').onclick=()=>hide(current);
   $('#openVideo').onclick=()=>api('/api/open-video',{id:current}).catch(e=>toast(e.message));
   $('#largeVideo').onerror=()=>{if(!$('#largeVideo').hasAttribute('src'))return;$('#videoError').hidden=false;$('#largeVideo').hidden=true;};

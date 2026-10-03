@@ -152,5 +152,7 @@ button.telegram-media-open{border:0;padding:0;border-radius:0;background:transpa
 @container (max-width:460px) {
   .viewer-bottom { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; padding:12px 14px; }
   .viewer-bottom .primary { grid-row:3; grid-column:1/-1; }
-  .viewer-bottom:has(#makeAvatar[hidden]) #hidePhoto { grid-column:1/-1; }
+  .viewer-bottom:has(#makeAvatar[hidden]):has(#muteVideo[hidden]) #hidePhoto { grid-column:1/-1; }
 }
+
+#muteVideo[aria-pressed="true"] { background:#324e3d; border-color:#61836b; color:#e0f0e3; }
