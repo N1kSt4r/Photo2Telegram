@@ -31,7 +31,7 @@ jobs:
       - name: Test images, projects, server and export
         run: python -m unittest discover -s tests -p "test_*.py" -v
       - name: Test browser logic
-        run: node --test tests/test_preview_loader.cjs tests/test_post_drafts.cjs tests/test_telegram_ui.cjs
+        run: node --test tests/test_preview_loader.cjs tests/test_post_drafts.cjs tests/test_telegram_ui.cjs tests/test_avatar.cjs
 
   video:
     runs-on: ubuntu-latest

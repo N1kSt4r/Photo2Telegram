@@ -227,6 +227,7 @@ function renderViewer() {
   if(p.missing){stopVideo();img.hidden=true;$('#largeError').hidden=true;}
   img.alt=p.name;
   prepareLargePreviews();
+  $('#makeAvatar').hidden=p.kind==='video'||p.missing;
   $('#viewerName').textContent=p.name;
   const used=usedIn(current).map(x=>x.title || 'Без названия');
   $('#viewerInfo').textContent=`${dateLabel(p.date.slice(0,10))} · ${p.date.slice(11,16)}${isVideo?' · ▶ '+durationLabel(p.duration):''}${used.length?' · В постах: '+used.join(', '):''}${p.dateSource==='file'?' · Дата изменения файла':''}`;
@@ -234,9 +235,9 @@ function renderViewer() {
   $('#previous').disabled=i<=0; $('#following').disabled=i>=viewerIds.length-1;
   const chosen=currentPost().photos.includes(current);
   $('#pickPhoto').disabled=p.missing&&!chosen;
-  $('#pickPhoto').textContent=chosen?'✓ Убрать из поста · Пробел':'＋ В текущий пост · Пробел';
+  $('#pickPhoto').innerHTML=`<span>${chosen?'✓ Убрать из поста':'＋ В текущий пост'}</span><kbd>Пробел</kbd>`;
   $('#pickPhoto').setAttribute('aria-pressed',chosen);
-  $('#hidePhoto').textContent=state.hidden.includes(current)?'Вернуть · H':'Скрыть · H';
+  $('#hidePhoto').innerHTML=`<span>${state.hidden.includes(current)?'Вернуть':'Скрыть'}</span><kbd>H</kbd>`;
 }
 function move(delta) { const next=viewerIds[viewerIds.indexOf(current)+delta]; if(next){current=next;renderViewer();} }
 function reorder(from,to) {
@@ -267,7 +268,7 @@ function bind() {
   $('#largeVideo').onerror=()=>{if(!$('#largeVideo').hasAttribute('src'))return;$('#videoError').hidden=false;$('#largeVideo').hidden=true;};
   $('#largePhoto').onerror=()=>{$('#largeError').hidden=false;$('#largePhoto').hidden=true;};
   document.addEventListener('keydown',e=>{
-    if(e.target.matches('input,textarea,select,video')||$('#cacheDialog').open||$('#folderDialog').open||$('#telegramDialog').open)return;
+    if(e.target.matches('input,textarea,select,video')||$('#cacheDialog').open||$('#folderDialog').open||$('#telegramDialog').open||$('#avatarDialog').open)return;
     if(e.altKey&&e.target.dataset.reorder&&['ArrowLeft','ArrowRight'].includes(e.key)) {e.preventDefault();const id=e.target.dataset.reorder,p=currentPost(),i=p.photos.indexOf(id),to=p.photos[i+(e.key==='ArrowRight'?1:-1)];if(to){reorder(id,to);document.querySelector(`[data-reorder="${id}"]`)?.focus();}return;}
     if(!current||e.ctrlKey||e.metaKey||e.altKey)return;
     if(e.key==='Escape'){e.preventDefault();closeViewer();}

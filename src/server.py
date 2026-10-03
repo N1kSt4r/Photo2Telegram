@@ -78,12 +78,24 @@ def image_date(path):
     return None
 
 
-def save_jpeg(source, target, size, *, quality=85, subsampling=-1):
+def save_jpeg(source, target, size, *, quality=85, subsampling=-1, crop=None):
     with Image.open(source) as original:
         profile = original.info.get('icc_profile')
-        if size is not None:
+        if size is not None and crop is None:
             original.thumbnail((size, size), Image.Resampling.LANCZOS)
         image = ImageOps.exif_transpose(original)
+        if crop is not None:
+            cx, cy, zoom = crop
+            width, height = image.size
+            side = min(width, height) / zoom
+            left, top = cx * width - side / 2, cy * height - side / 2
+            # Preview dimensions can round by a pixel; keep the final square inside
+            # the oriented original even when the selection touches an edge.
+            edge = max(1, round(side))
+            x = min(width-edge, max(0, round(left)))
+            y = min(height-edge, max(0, round(top)))
+            image = image.crop((x, y, x+edge, y+edge))
+            image.thumbnail((size, size), Image.Resampling.LANCZOS)
         if 'A' in image.getbands() or 'transparency' in image.info:
             rgba = image.convert('RGBA')
             background = Image.new('RGBA', rgba.size, 'white')
@@ -568,7 +580,7 @@ def handler_for(manager):
                             return self.respond(200, (APP / 'web' / 'video.svg').read_bytes(), 'image/svg+xml')
                         raise
                     return self.respond(200, preview, 'image/jpeg', True)
-                files = {'/': 'index.html', '/app.js': 'app.js', '/previews.js': 'previews.js', '/telegram.js': 'telegram.js', '/style.css': 'style.css', '/video.svg': 'video.svg', '/missing.svg': 'missing.svg'}
+                files = {'/': 'index.html', '/app.js': 'app.js', '/previews.js': 'previews.js', '/telegram.js': 'telegram.js', '/avatar.js': 'avatar.js', '/style.css': 'style.css', '/video.svg': 'video.svg', '/missing.svg': 'missing.svg'}
                 if url.path not in files:
                     return self.respond(404, {'error': 'Not found'})
                 name = files[url.path]
@@ -587,7 +599,7 @@ def handler_for(manager):
                 if not 0 <= size <= 4_000_000:
                     return self.respond(413, {'error': 'Слишком большой запрос'})
                 data = json.loads(self.rfile.read(size) or b'{}')
-                checking = self.path == '/api/telegram/check'
+                checking = self.path in ('/api/telegram/check', '/api/telegram/avatar')
                 slow = checking or self.path in ('/api/refresh', '/api/cache/clear')
                 with manager.lock:
                     library = manager.current
@@ -634,6 +646,8 @@ def handler_for(manager):
                     return self.respond(200, library.publisher.save_settings(data))
                 if self.path == '/api/telegram/check':
                     return self.respond(200, library.publisher.check())
+                if self.path == '/api/telegram/avatar':
+                    return self.respond(200, library.publisher.set_avatar(data))
                 if self.path == '/api/telegram/prepare':
                     return self.respond(200, library.publisher.prepare(data.get('ids')))
                 if self.path == '/api/telegram/send-ready':

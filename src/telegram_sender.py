@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import threading
+import tempfile
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -95,7 +96,7 @@ class BotClient:
             # JSON is also the simpler format for all calls without attachments.
             parts = [json.dumps(fields, ensure_ascii=False).encode('utf-8')]
             content_type = 'application/json'
-        publishing = method.startswith('send')
+        publishing = method.startswith('send') or method == 'setChatPhoto'
 
         def transport_error(message):
             hint = ('Результат отправки неизвестен; проверьте канал перед повтором.' if publishing else
@@ -105,7 +106,7 @@ class BotClient:
         total = sum(part.stat().st_size if isinstance(part, Path) else len(part) for part in parts)
         parsed = urlsplit(self.settings['endpoint'])
         cls = http.client.HTTPSConnection if parsed.scheme == 'https' else http.client.HTTPConnection
-        connection = cls(parsed.hostname, parsed.port, timeout=600 if method.startswith('send') else 20)
+        connection = cls(parsed.hostname, parsed.port, timeout=600 if publishing else 20)
         sent = 0
         try:
             connection.putrequest('POST', f'/bot{self.settings["token"]}/{method}')
@@ -264,6 +265,37 @@ class Publisher:
                 self._apply_destination(destination)
                 self.job.update(channel_status='ready', channel_error='')
         return destination
+
+    def set_avatar(self, data):
+        crop = data.get('crop')
+        if (not isinstance(crop, list) or len(crop) != 3 or
+                any(type(v) not in (int, float) or not math.isfinite(v) for v in crop) or
+                not (0 <= crop[0] <= 1 and 0 <= crop[1] <= 1 and 1 <= crop[2] <= 5)):
+            raise ValueError('Некорректная область аватарки')
+        with self.library.lock:
+            ident = data.get('photo')
+            source = self.library.files.get(ident) if isinstance(ident, str) else None
+            photo = next((p for p in self.library.photos if p['id'] == ident), None)
+            if not source or not source.is_file() or not photo or photo.get('kind') == 'video':
+                raise ValueError('Выберите доступную фотографию')
+        with self.lock:
+            settings = validated_settings(self.settings, {})
+        client = self.client_factory(settings)
+        destination = client.check()
+        if (destination['chat_id'] != data.get('chat_id') or destination['bot_id'] != data.get('bot_id')):
+            raise ValueError('Канал или бот изменился. Откройте редактор аватарки заново.')
+        with tempfile.TemporaryDirectory(prefix='photo2telegram-avatar-') as directory:
+            target = Path(directory) / 'avatar.jpg'
+            self.save_jpeg(source, target, 640, quality=95, subsampling=0, crop=crop)
+            try:
+                result = client.call('setChatPhoto', {'chat_id': destination['chat_id'], 'photo': 'attach://avatar'}, {'avatar': target})
+            except TelegramError as error:
+                if error.uncertain or 'Соединение' in str(error):
+                    raise ValueError('Не удалось получить подтверждение. Проверьте аватарку канала перед повтором.') from None
+                raise
+            if result is not True:
+                raise ValueError('Telegram не подтвердил установку аватарки. Проверьте канал перед повтором.')
+        return dict(ok=True, channel=destination['channel'])
 
     def _check_destination(self, settings, fresh=False):
         with self.lock:
