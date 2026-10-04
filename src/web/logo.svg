@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="190 94 1024 1024" fill="none">
+  <title>Photo2Telegram — логотип с градиентами</title>
+  <defs>
+    <linearGradient id="green" gradientUnits="userSpaceOnUse" x1="260" y1="205" x2="1030" y2="1042">
+      <stop stop-color="#4b8060"/>
+      <stop offset="0.5" stop-color="#315c46"/>
+      <stop offset="1" stop-color="#193d2b"/>
+    </linearGradient>
+    <linearGradient id="sage" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#e6efc6"/>
+      <stop offset="1" stop-color="#92b476"/>
+    </linearGradient>
+    <path id="frame-shape" d="
+      M 331 253 H 953
+      C 1004 253 1037 288 1037 337
+      V 907
+      C 1037 958 1001 994 950 994
+      H 335
+      C 283 994 247 958 247 908
+      V 337
+      C 247 288 282 253 331 253 Z"/>
+  </defs>
+  <g stroke-width="96" stroke-linejoin="round" paint-order="stroke fill">
+    <use href="#frame-shape" fill="#fbf7ed" stroke="url(#green)"/>
+    <path id="frame-interior" fill="url(#green)" d="
+      M 334 322 H 947
+      C 961 322 969 330 969 344
+      V 904
+      C 969 918 961 927 947 927
+      H 337
+      C 323 927 315 919 315 905
+      V 341
+      C 315 329 322 322 334 322 Z"/>
+    <circle id="sun" cx="484.5" cy="492.5" r="75.5" fill="url(#sage)"/>
+    <path id="mountains" fill="#fbf7ed" d="
+      M 362 898
+      C 347 898 339 890 339 876
+      V 833
+      C 339 824 341 818 347 811
+      L 463 683
+      C 475 668 493 667 506 681
+      L 566 757
+      L 720 583
+      C 732 568 750 568 763 583
+      L 937 813
+      C 942 820 944 826 944 835
+      V 875
+      C 944 890 937 898 921 898
+      Z"/>
+    <path id="paper-plane" fill="url(#sage)" stroke="url(#green)" d="
+    M 1136 219
+    C 1149 213 1161 222 1156 238
+    L 1057 523
+    C 1053 538 1041 544 1028 537
+    L 949 499
+    L 907 562
+    C 900 572 887 568 887 556
+    V 471
+    L 1098 266
+    L 846 441
+    L 765 405
+    C 746 398 746 381 765 373
+    Z"/>
+  </g>
+</svg>

@@ -585,12 +585,12 @@ def handler_for(manager):
                             return self.respond(200, (APP / 'web' / 'video.svg').read_bytes(), 'image/svg+xml')
                         raise
                     return self.respond(200, preview, 'image/jpeg', True)
-                files = {'/': 'index.html', '/app.js': 'app.js', '/previews.js': 'previews.js', '/telegram.js': 'telegram.js', '/avatar.js': 'avatar.js', '/style.css': 'style.css', '/video.svg': 'video.svg', '/missing.svg': 'missing.svg'}
+                files = {'/': 'index.html', '/logo.png': 'logo.png', '/logo.svg': 'logo.svg', '/app.js': 'app.js', '/previews.js': 'previews.js', '/telegram.js': 'telegram.js', '/avatar.js': 'avatar.js', '/style.css': 'style.css', '/video.svg': 'video.svg', '/missing.svg': 'missing.svg'}
                 if url.path not in files:
                     return self.respond(404, {'error': 'Not found'})
                 name = files[url.path]
-                mime = {'html': 'text/html', 'js': 'text/javascript', 'css': 'text/css', 'svg': 'image/svg+xml'}[name.rsplit('.', 1)[1]]
-                self.respond(200, (APP / 'web' / name).read_bytes(), mime + '; charset=utf-8')
+                mime = {'html': 'text/html', 'js': 'text/javascript', 'css': 'text/css', 'svg': 'image/svg+xml', 'png': 'image/png'}[name.rsplit('.', 1)[1]]
+                self.respond(200, (APP / 'web' / name).read_bytes(), mime if name.endswith('.png') else mime + '; charset=utf-8')
             except KeyError:
                 self.respond(404, {'error': 'Не найдено'})
             except Exception as e:

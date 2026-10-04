@@ -24,6 +24,9 @@
 *.[mM]4[vV]
 *.[wW][eE][bB][mM]
 
+# App icon generated from the final SVG
+!/src/web/logo.png
+
 # Synthetic fixtures are intentionally versioned
 !/tests/fixtures/*.png
 !/tests/fixtures/*.jpg
