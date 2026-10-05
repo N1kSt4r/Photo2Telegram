@@ -76,7 +76,7 @@ function videoViewer(){
   const app=setup([post('current')],'current');
   app.run(`
     globalThis.elements=new Map();
-    function element(){return {hidden:false,textContent:'',value:0,attrs:{},events:{},focus(){},
+    function element(){return {hidden:false,textContent:'',value:0,attrs:{},events:{},focus(){},style:{},clientWidth:800,clientHeight:500,
       classList:{remove(){},toggle(){}},setAttribute(k,v){this.attrs[k]=String(v);},
       getAttribute(k){return this.attrs[k]??null;},hasAttribute(k){return k in this.attrs;},
       removeAttribute(k){delete this.attrs[k];},addEventListener(k,fn){this.events[k]=fn;}};}
@@ -224,4 +224,40 @@ test('unavailable files, obsolete filters and broken storage do not prevent brow
   app.run("sessionStorage.getItem=()=>{throw new Error('Blocked');};sessionStorage.setItem=()=>{throw new Error('Quota');}");
   assert.equal(app.run('readViewState()'),null);
   assert.doesNotThrow(()=>app.run('saveViewState()'));
+});
+
+test('rotation applies to every occurrence, wraps after four turns and preserves playback and mute',async()=>{
+  const app=videoViewer();
+  app.run("state.posts.push({id:'second',title:'Second',caption:'',photos:['clip']});toggleVideoAudio()");
+  await app.run('toggleVideoPlayback()');
+  const posts=app.posts();
+  app.run('rotateMedia(90)');
+  assert.equal(app.run('state.rotations.clip'),90);
+  assert.equal(app.run("$('#largeVideo').style.width"),'500px');
+  assert.equal(app.run("$('#largeVideo').style.height"),'800px');
+  assert.match(app.run("$('#largeVideo').style.transform"),/rotate\(90deg\)/);
+  assert.equal(app.run("previewRotation('clip')"),90);
+  assert.equal(app.run('video.currentTime'),30);
+  assert.equal(app.run('video.muted'),true);
+  assert.equal(app.run('video.paused'),false);
+  assert.equal(app.run('video.loads'),0);
+  app.run('rotateMedia(90);rotateMedia(90);rotateMedia(90)');
+  assert.equal(app.run('state.rotations.clip'),undefined);
+  assert.equal(app.run("$('#largeVideo').style.width"),'100%');
+  app.run('rotateMedia(-90)');
+  assert.equal(app.run('state.rotations.clip'),270);
+  assert.deepEqual(app.posts(),posts);
+  app.run("byId.get('clip').missing=true;rotateMedia(90)");
+  assert.equal(app.run('state.rotations.clip'),270);
+});
+
+test('photo rotation fits portrait turns into the viewer and resets on the next file',()=>{
+  const app=videoViewer();
+  app.run("byId.get('clip').kind='photo';rotateMedia(90)");
+  assert.equal(app.run("$('#largePhoto').style.width"),'500px');
+  assert.equal(app.run("$('#largePhoto').style.height"),'800px');
+  app.run('move(1)');
+  assert.match(app.run("$('#largeVideo').style.transform"),/rotate\(0deg\)/);
+  app.run('move(-1)');
+  assert.match(app.run("$('#largePhoto').style.transform"),/rotate\(90deg\)/);
 });

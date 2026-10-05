@@ -78,12 +78,15 @@ def image_date(path):
     return None
 
 
-def save_jpeg(source, target, size, *, quality=85, subsampling=-1, crop=None):
+def save_jpeg(source, target, size, *, quality=85, subsampling=-1, crop=None, rotation=0):
     with Image.open(source) as original:
         profile = original.info.get('icc_profile')
         if size is not None and crop is None:
             original.thumbnail((size, size), Image.Resampling.LANCZOS)
         image = ImageOps.exif_transpose(original)
+        if rotation:
+            image = image.transpose({90: Image.Transpose.ROTATE_270, 180: Image.Transpose.ROTATE_180,
+                                     270: Image.Transpose.ROTATE_90}[rotation])
         if crop is not None:
             cx, cy, zoom = crop
             width, height = image.size
@@ -238,6 +241,11 @@ class Library:
                 any(i not in self.catalog or self.catalog[i].get('kind') != 'video' or enabled is not True
                     for i, enabled in muted.items())):
             raise ValueError('Некорректный список видео без звука')
+        rotations = value.get('rotations', {})
+        if (not isinstance(rotations, dict) or len(rotations) > 10000 or
+                any(i not in self.catalog or type(angle) is not int or angle not in (0, 90, 180, 270)
+                    for i, angle in rotations.items())):
+            raise ValueError('Некорректный поворот файла')
         if value.get('active') is not None and value['active'] not in ids:
             raise ValueError('Неизвестный текущий пост')
 

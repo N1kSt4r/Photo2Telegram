@@ -351,7 +351,7 @@ class Publisher:
                 for ident in post['photos']:
                     if ident not in cached_files:
                         photo = self.library.catalog.get(ident, {})
-                        info = dict(id=ident, name=photo.get('name', ident), kind=photo.get('kind', 'photo'), bytes=None, cached=False)
+                        info = dict(id=ident, name=photo.get('name', ident), kind=photo.get('kind', 'photo'), bytes=None, cached=False, rotation=self.library.state.get('rotations', {}).get(ident, 0))
                         source = self.library.files.get(ident)
                         try:
                             if source:
@@ -400,7 +400,7 @@ class Publisher:
         with self.library.lock:
             ids = {p['id'] for p in self.job.get('_posts', [])}
             posts = [copy.deepcopy(p) for p in self.library.state['posts'] if p['id'] in ids]
-        signature = json.dumps([posts, self.library.state.get('mutedVideos', {})], sort_keys=True)
+        signature = json.dumps([posts, self.library.state.get('mutedVideos', {}), self.library.state.get('rotations', {})], sort_keys=True)
         if signature == self.job.get('_draft_signature'):
             return
         available = self.job.setdefault('_available', {})
@@ -426,7 +426,7 @@ class Publisher:
                     if not m or not source or not m['path'].is_file() or (m.get('cache_key') and m['cache_key'] != self._media_cache_key(source, self.job['_settings'])):
                         valid = False
                     else:
-                        item['files'][index].update(status='ready', bytes=m['path'].stat().st_size, converted=m['converted'], prepared_ref=m['path'].name)
+                        item['files'][index].update(status='ready', bytes=m['path'].stat().st_size, converted=m['converted'], rotation=m.get('rotation', 0), prepared_ref=m['path'].name)
                 except OSError:
                     valid = False
             limit = 1024 if post['photos'] else 4096
@@ -435,7 +435,7 @@ class Publisher:
             elif valid:
                 item['status'] = 'ready'
                 item['files'] = [dict(id=ident, name=m['name'], kind=m['kind'], bytes=m['path'].stat().st_size,
-                                      converted=m['converted'], prepared_ref=m['path'].name) for ident,m in zip(post['photos'],media)]
+                                      converted=m['converted'], rotation=m.get('rotation', 0), prepared_ref=m['path'].name) for ident,m in zip(post['photos'],media)]
                 prepared.append(dict(post=post, media=media, key=''))
             items.append(item)
         self.job.update(items=items, _prepared=prepared, _draft_signature=signature)
@@ -522,7 +522,7 @@ class Publisher:
         for ident in post['photos']:
             photo = self.library.catalog.get(ident, {})
             result.append(dict(id=ident, name=photo.get('name', ident), kind=photo.get('kind', 'photo'),
-                               bytes=None, converted=False))
+                               bytes=None, converted=False, rotation=0 if previous else self.library.state.get('rotations', {}).get(ident, 0)))
         return result
 
     def prepare(self, ids=None, cache_only=False, send_after=False):
@@ -556,7 +556,7 @@ class Publisher:
                 initial_items.append(item)
             self.job = dict(id=uuid.uuid4().hex, status='preparing', done=0, total=len(posts),
                             message='Проверяем канал и готовим файлы…', channel_status='checking', channel_error='', items=initial_items, skipped=0,
-                            _settings=settings, _posts=posts, _files=files, _cache_only=cache_only, _send_after=send_after, _draft_signature=json.dumps([posts, self.library.state.get('mutedVideos', {})], sort_keys=True))
+                            _settings=settings, _posts=posts, _files=files, _cache_only=cache_only, _send_after=send_after, _draft_signature=json.dumps([posts, self.library.state.get('mutedVideos', {}), self.library.state.get('rotations', {})], sort_keys=True))
             self._working = True
             threading.Thread(target=self._prepare, daemon=True).start()
             return {'id': self.job['id']}
@@ -627,7 +627,7 @@ class Publisher:
                         media = record['media'][index]
                         if media:
                             summary['files'][index].update(status='ready', error='', bytes=media['path'].stat().st_size,
-                                converted=media['converted'], cached=media.get('cached', False), prepared_ref=media['path'].name,
+                                converted=media['converted'], rotation=media.get('rotation', 0), cached=media.get('cached', False), prepared_ref=media['path'].name,
                                 cache_ref=(media.get('cache_key','')+media['path'].suffix) if media.get('cache_key') else None)
                         else:
                             summary['files'][index]['status'] = 'unprepared'
@@ -646,7 +646,7 @@ class Publisher:
                         else:
                             summary['status'] = 'ready'
                             summary['files'] = [dict(id=ident, name=m['name'], kind=m['kind'], bytes=m['path'].stat().st_size,
-                                                     converted=m['converted'], cached=m.get('cached', False), prepared_ref=m['path'].name, status='ready')
+                                                     converted=m['converted'], rotation=m.get('rotation', 0), cached=m.get('cached', False), prepared_ref=m['path'].name, status='ready')
                                                 for ident, m in zip(record['post']['photos'], record['media'])]
                     self._update(items=copy.deepcopy(summaries),
                                  done=sum(p['status'] != 'preparing' for p in summaries),
@@ -717,12 +717,19 @@ class Publisher:
         ident = hashlib.sha256(source.name.encode()).hexdigest()[:20]
         return self.library.state.get('mutedVideos', {}).get(ident, False)
 
+    def _media_rotation(self, source):
+        ident = hashlib.sha256(source.name.encode()).hexdigest()[:20]
+        return self.library.state.get('rotations', {}).get(ident, 0)
+
     def _media_cache_key(self, source, settings):
         stat = source.stat()
         value = [str(source.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
                  settings['mode'], self.library.ffmpeg, self.library.ffprobe, ('jpeg2560-q85-mp4-v1' if source.suffix.lower() in {'.mov', '.mp4', '.m4v', '.webm'} else 'jpeg2560-q95-420-v4')]
         if settings.get('_mute_video', self._video_muted(source)):
             value.append('no-audio-v1')
+        rotation = settings.get('_rotation', self._media_rotation(source))
+        if rotation:
+            value.append(f'rotation-{rotation}-v1')
         return hashlib.sha256(json.dumps(value).encode()).hexdigest()
 
     def _has_media_cache(self, source, settings):
@@ -765,7 +772,7 @@ class Publisher:
             shutil.copyfile(source, target)
 
     def _prepare_media(self, source, settings):
-        media_settings = dict(settings, _mute_video=self._video_muted(source))
+        media_settings = dict(settings, _mute_video=self._video_muted(source), _rotation=self._media_rotation(source))
         key = self._media_cache_key(source, media_settings)
         with self.lock:
             lock = self._cache_locks.setdefault(key, threading.Lock())
@@ -785,11 +792,11 @@ class Publisher:
                     self._link_or_copy(cached, target)
                     os.utime(metadata, None)
                     result = dict(path=target, kind='video' if video else 'photo', name=source.name,
-                                  converted=info['converted'], cached=True, cache_key=key)
+                                  converted=info['converted'], cached=True, cache_key=key, rotation=media_settings['_rotation'])
                     if video:
                         self._prepare_video_attributes(result, info, metadata)
                     if key != self._media_cache_key(source, settings):
-                        raise ValueError(f'{source.name}: исходник или настройка звука изменились. Повторите подготовку.')
+                        raise ValueError(f'{source.name}: исходник, настройка звука или поворота изменились. Повторите подготовку.')
                     return result
                 if self.cancelled.is_set():
                     raise ValueError('Подготовка отменена')
@@ -797,14 +804,14 @@ class Publisher:
                     raise ValueError(f'{source.name}: готовый файл отсутствует или устарел. Повторите подготовку.')
                 result = self._prepare_media_file(source, media_settings, target)
                 if key != self._media_cache_key(source, settings):
-                    raise ValueError(f'{source.name}: исходник или настройка звука изменились. Повторите подготовку.')
+                    raise ValueError(f'{source.name}: исходник, настройка звука или поворота изменились. Повторите подготовку.')
                 # Metadata is the commit marker. Never reuse an unfinished file.
                 metadata.unlink(missing_ok=True)
                 cached.unlink(missing_ok=True)
                 self._link_or_copy(target, cached)
                 info = dict(bytes=cached.stat().st_size, converted=result['converted'])
                 write_json(metadata, info)
-                result.update(cached=False, cache_key=key)
+                result.update(cached=False, cache_key=key, rotation=media_settings['_rotation'])
                 if video:
                     self._prepare_video_attributes(result, info, metadata)
                 return result
@@ -919,8 +926,9 @@ class Publisher:
         before = source.stat()
         video = source.suffix.lower() in {'.mov', '.mp4', '.m4v', '.webm'}
         converted = True
+        rotation = settings.get('_rotation', self._media_rotation(source))
         if not video:
-            self.save_jpeg(source, target, 2560, quality=95, subsampling=2)
+            self.save_jpeg(source, target, 2560, quality=95, subsampling=2, rotation=rotation)
             with Image.open(target) as image:
                 if max(image.size) / min(image.size) > 20:
                     raise ValueError(f'{source.name}: слишком вытянутое фото для Telegram (соотношение больше 20:1)')
@@ -928,6 +936,8 @@ class Publisher:
                 raise ValueError(f'{source.name}: подготовленное фото превышает 10 МБ')
         else:
             muted = settings.get('_mute_video', self._video_muted(source))
+            if rotation and not self.library.ffmpeg:
+                raise ValueError(f'{source.name}: для поворота видео нужен FFmpeg')
             if muted and not self.library.ffmpeg:
                 raise ValueError(f'{source.name}: для удаления звука нужен FFmpeg')
             compatible = source.suffix.lower() == '.mp4'
@@ -941,21 +951,25 @@ class Publisher:
                 audio = [s for s in streams if s.get('codec_type') == 'audio']
                 compatible = ((compatible or muted) and bool(videos) and videos[0].get('codec_name') == 'h264'
                               and (muted or all(s.get('codec_name') == 'aac' for s in audio)))
-            if compatible and muted:
+            if compatible and muted and not rotation:
                 result = self._run_media_tool([self.library.ffmpeg, '-nostdin', '-v', 'error', '-y', '-i', str(source),
                     '-map', '0:v:0', '-c:v', 'copy', '-an', '-movflags', '+faststart', str(target)], timeout=1800)
                 if result.returncode:
                     raise ValueError(f'{source.name}: FFmpeg не смог удалить звук')
-            elif compatible:
+            elif compatible and not rotation:
                 shutil.copyfile(source, target)
                 converted = False
             else:
                 if not self.library.ffmpeg:
                     raise ValueError(f'{source.name}: для подготовки этого видео нужен FFmpeg. Используйте MP4 или установите FFmpeg.')
                 audio_args = ['-an'] if muted else ['-map', '0:a:0?', '-c:a', 'aac']
+                # FFmpeg autorotates the source metadata before these user-selected turns.
+                filters = {0: [], 90: ['transpose=clock'], 180: ['hflip', 'vflip'],
+                           270: ['transpose=cclock']}[rotation] + ['pad=ceil(iw/2)*2:ceil(ih/2)*2']
                 result = self._run_media_tool([self.library.ffmpeg, '-nostdin', '-v', 'error', '-y', '-i', str(source),
                                          '-map', '0:v:0', '-c:v', 'libx264', '-preset', 'fast',
-                                         '-crf', '20', '-pix_fmt', 'yuv420p', '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                                         '-crf', '20', '-pix_fmt', 'yuv420p', '-vf', ','.join(filters),
+                                         '-metadata:s:v:0', 'rotate=0',
                                          *audio_args, '-movflags', '+faststart', str(target)], timeout=1800)
                 if result.returncode:
                     raise ValueError(f'{source.name}: FFmpeg не смог подготовить MP4')

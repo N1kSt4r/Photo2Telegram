@@ -125,3 +125,12 @@ test('channel discovery shows code and applies a found channel only once',()=>{
   app.node('#telegramChannel').value='@manual';app.run('renderTelegram(data)');
   assert.equal(app.node('#telegramChannel').value,'@manual');
 });
+
+test('sent thumbnails use the recorded rotation; older records default to no rotation',()=>{
+  const app=setup();
+  app.run("previewRotation=(id,angle)=>angle;photoURL=id=>'/photo/'+id;byId.set('photo',{kind:'photo'});");
+  const markup=app.run("telegramThumbnail({id:'photo',name:'photo.jpg',kind:'photo',rotation:90},0,{id:'sent',status:'sent'})");
+  assert.match(markup,/data-rotation="90"/);
+  assert.doesNotMatch(markup,/style=/); // Inline styles are blocked by the server CSP.
+  assert.match(app.run("telegramThumbnail({id:'photo',name:'photo.jpg',kind:'photo'},0,{id:'old',status:'sent'})"),/data-rotation="0"/);
+});
