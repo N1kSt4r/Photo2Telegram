@@ -79,6 +79,109 @@ function durationLabel(seconds) {
   const n=Math.max(0,Math.round(seconds)), h=Math.floor(n/3600), m=Math.floor(n/60)%60, sec=String(n%60).padStart(2,'0');
   return h ? `${h}:${String(m).padStart(2,'0')}:${sec}` : `${m}:${sec}`;
 }
+const correctionKeys=['brightness','contrast','saturation'];
+let correctionOpen=false;
+function photoCorrection(id) {return state.corrections?.[id] || {};}
+function correctionMatrix(correction) {
+  const [b,c,s]=correctionKeys.map(k=>1+(correction[k]||0)/100), weights=[.213,.715,.072];
+  return [0,1,2].flatMap(row=>[
+    ...weights.map((w,col)=>(w*(1-s)+(row===col?s:0))*b*c),0,(1-c)/2,
+  ]).concat([0,0,0,1,0]);
+}
+function correctionFilter(correction) {
+  const values=correctionKeys.map(k=>correction[k]||0);
+  if(!values.some(Boolean))return 'brightness(1)';
+  const id='correction-'+values.join('-');
+  if(!document.getElementById(id)) {
+    const ns='http://www.w3.org/2000/svg', filter=document.createElementNS(ns,'filter');
+    filter.id=id;filter.setAttribute('color-interpolation-filters','sRGB');
+    const matrix=document.createElementNS(ns,'feColorMatrix');
+    matrix.setAttribute('type','matrix');matrix.setAttribute('values',correctionMatrix(correction).join(' '));
+    filter.append(matrix);$('#correctionFilters defs').append(filter);
+  }
+  return `url(#${id})`;
+}
+function applyPhotoCorrection(image, correction) {
+  image.style.setProperty('--photo-correction',correctionFilter(correction));
+}
+function applyCorrectionPreviews(root=document, id=null) {
+  for(const image of root.querySelectorAll('img[data-correction-id]')) {
+    if(id===null||image.dataset.correctionId===id)
+      applyPhotoCorrection(image,photoCorrection(image.dataset.correctionId));
+  }
+  for(const image of root.querySelectorAll('img[data-correction-snapshot]'))
+    applyPhotoCorrection(image,JSON.parse(image.dataset.correctionSnapshot));
+}
+function showCorrectionComparison(show) {
+  applyPhotoCorrection($('#largePhoto'),show?{}:photoCorrection(current));
+  $('#correctionCompare').setAttribute('aria-pressed',String(show));
+}
+function renderCorrection() {
+  const photo=byId.get(current), enabled=!!photo&&!photo.missing&&photo.kind!=='video';
+  const opened=correctionOpen&&enabled;
+  const layoutChanged=$('#postPanel').hidden!==opened||$('#makeAvatar').hidden===enabled;
+  $('#postPanel').hidden=opened;$('#correctionPanel').hidden=!opened;
+  $('#toggleCorrection').hidden=!enabled;
+  $('#makeAvatar').hidden=!enabled;
+  $('#toggleCorrection').setAttribute('aria-pressed',String(opened));
+  const correction=enabled?photoCorrection(current):{};
+  const adjusted=Object.values(correction).some(Boolean);
+  $('#toggleCorrection').classList.toggle('adjusted',adjusted);
+  $('#correctionName').textContent=photo?.name||'';
+  for(const key of correctionKeys){
+    const value=correction[key]||0;
+    $('#correction-'+key).value=value;
+    $('#correction-'+key).disabled=blocked;
+    $('#correction-'+key+'-value').textContent=value>0?'+'+value:String(value);
+  }
+  $('#correctionReset').disabled=!adjusted||blocked;
+  $('#correctionCompare').disabled=!adjusted;
+  const previous=state.lastCorrection;
+  $('#correctionReuse').disabled=blocked||!previous||!Object.values(previous).some(Boolean);
+  $('#correctionReuse').title=previous?`Яркость ${previous.brightness||0}, контрастность ${previous.contrast||0}, насыщенность ${previous.saturation||0}`:'Сначала настройте коррекцию на любой фотографии';
+  showCorrectionComparison(false);
+  if(layoutChanged)previews.refresh();
+}
+function setPhotoCorrection(correction, remember=true) {
+  const photo=byId.get(current);
+  if(blocked||!photo||photo.missing||photo.kind==='video')return;
+  state.corrections ||= {};
+  if(Object.values(correction).some(Boolean)) {
+    state.corrections[current]={...correction};
+    if(remember)state.lastCorrection={...correction};
+  } else delete state.corrections[current];
+  changed();renderCorrection();applyCorrectionPreviews(document,current);
+}
+function changeCorrection(key, value) {
+  if(key!==null&&(!correctionKeys.includes(key)||!Number.isInteger(value)||value< -100||value>100))return;
+  setPhotoCorrection(key===null?{}:{...photoCorrection(current),[key]:value});
+}
+function reuseLastCorrection() {
+  if(state.lastCorrection&&Object.values(state.lastCorrection).some(Boolean))
+    setPhotoCorrection(state.lastCorrection,false);
+}
+function bindCorrection() {
+  $('#toggleCorrection').onclick=()=>{correctionOpen=!correctionOpen;renderCorrection();if(correctionOpen)$('aside').scrollTop=0;saveViewState();};
+  $('#backToPost').onclick=()=>{correctionOpen=false;renderCorrection();saveViewState();};
+  for(const key of correctionKeys){
+    const input=$('#correction-'+key);
+    input.oninput=()=>changeCorrection(key,Number(input.value));
+    input.ondblclick=()=>changeCorrection(key,0);
+  }
+  $('#correctionReset').onclick=()=>changeCorrection(null);
+  $('#correctionReuse').onclick=reuseLastCorrection;
+  const compare=$('#correctionCompare');
+  compare.onpointerdown=e=>{if(e.button!==0)return;compare.setPointerCapture(e.pointerId);showCorrectionComparison(true);};
+  compare.onpointerup=compare.onpointercancel=compare.onlostpointercapture=()=>showCorrectionComparison(false);
+  compare.onkeydown=e=>{if([' ','Enter'].includes(e.key)){e.preventDefault();showCorrectionComparison(true);}};
+  compare.onkeyup=e=>{if([' ','Enter'].includes(e.key)){e.preventDefault();showCorrectionComparison(false);}};
+  compare.onblur=()=>showCorrectionComparison(false);
+  window.addEventListener('blur',()=>showCorrectionComparison(false));
+  $('#correctionPanel').addEventListener('keydown',e=>{
+    if(e.key==='Escape'){e.preventDefault();correctionOpen=false;renderCorrection();saveViewState();}
+    if(e.target.matches('input,button'))e.stopPropagation();
+  });
+}
 function mediaRotation(id) {return state.rotations?.[id] || 0;}
 function previewRotation(id, angle=mediaRotation(id)) {
   return [90,180,270].includes(angle)?angle:0;
@@ -172,9 +275,10 @@ function renderGallery() {
   visible.forEach(p=>{
     const date=p.date.slice(0,10);
     if(date!==last) { if(last!==null) html+='</div>'; html+=`<h3 class="day-title">${esc(dateLabel(date))}</h3><div class="grid">`;last=date; }
-    html+=`<article class="photo ${selected.has(p.id)?'selected':''}" data-photo="${p.id}"><button class="open-photo" data-open="${p.id}" aria-label="Открыть ${esc(p.name)}"><img data-rotation="${previewRotation(p.id)}" decoding="async" data-preview="${photoURL(p.id)}" alt="${esc(p.name)}">${videoBadge(p.id)}</button><button class="select-photo" ${p.missing&&!selected.has(p.id)?'disabled':''} data-pick="${p.id}" aria-label="Выбрать файл" aria-pressed="${selected.has(p.id)}">${selected.has(p.id)?currentPost().photos.indexOf(p.id)+1:'＋'}</button>${used.has(p.id)?`<span class="used-badge">Пост ${used.get(p.id).join(', ')}</span>`:''}<div class="photo-meta"><span>${p.date?p.date.slice(8,10)+'.'+p.date.slice(5,7)+' · '+p.date.slice(11,16):'Дата неизвестна'}</span><button class="hide-card" data-hide="${p.id}">${hidden.has(p.id)?'Вернуть':'Скрыть'}</button></div></article>`;
+    html+=`<article class="photo ${selected.has(p.id)?'selected':''}" data-photo="${p.id}"><button class="open-photo" data-open="${p.id}" aria-label="Открыть ${esc(p.name)}"><img data-correction-id="${p.id}" data-rotation="${previewRotation(p.id)}" decoding="async" data-preview="${photoURL(p.id)}" alt="${esc(p.name)}">${videoBadge(p.id)}</button><button class="select-photo" ${p.missing&&!selected.has(p.id)?'disabled':''} data-pick="${p.id}" aria-label="Выбрать файл" aria-pressed="${selected.has(p.id)}">${selected.has(p.id)?currentPost().photos.indexOf(p.id)+1:'＋'}</button>${used.has(p.id)?`<span class="used-badge">Пост ${used.get(p.id).join(', ')}</span>`:''}<div class="photo-meta"><span>${p.date?p.date.slice(8,10)+'.'+p.date.slice(5,7)+' · '+p.date.slice(11,16):'Дата неизвестна'}</span><button class="hide-card" data-hide="${p.id}">${hidden.has(p.id)?'Вернуть':'Скрыть'}</button></div></article>`;
   });
   $('#gallery').innerHTML=html+(last!==null?'</div>':'<div class="empty"><strong>Здесь пока нет фото и видео</strong>Измените фильтры или верните скрытые кадры.</div>');
+  applyCorrectionPreviews();
   previews.refresh();
 }
 function renderSidebar() {
@@ -183,15 +287,17 @@ function renderSidebar() {
   $('#postSelect').value=state.active;
   $('#title').value=p?.title || ''; $('#caption').value=p?.caption || '';
   $('#selectionCount').textContent=`${p?.photos.length || 0} / 10`;
-  let html=(p?.photos || []).map((id,n)=>`<div class="mini" draggable="true" data-mini="${id}" title="Перетащите для перестановки. Alt + ← / → на миниатюре — переместить."><button class="mini-open" data-open="${id}" data-reorder="${id}" aria-label="Файл ${n+1}: ${esc(byId.get(id).name)}"><img data-rotation="${previewRotation(id)}" data-preview="${photoURL(id)}" alt="" draggable="false">${videoBadge(id)}</button><span class="number">${n+1}</span><button class="remove" data-pick="${id}" aria-label="Убрать файл ${n+1}">×</button></div>`).join('');
+  let html=(p?.photos || []).map((id,n)=>`<div class="mini" draggable="true" data-mini="${id}" title="Перетащите для перестановки. Alt + ← / → на миниатюре — переместить."><button class="mini-open" data-open="${id}" data-reorder="${id}" aria-label="Файл ${n+1}: ${esc(byId.get(id).name)}"><img data-correction-id="${id}" data-rotation="${previewRotation(id)}" data-preview="${photoURL(id)}" alt="" draggable="false">${videoBadge(id)}</button><span class="number">${n+1}</span><button class="remove" data-pick="${id}" aria-label="Убрать файл ${n+1}">×</button></div>`).join('');
   for(let i=p?.photos.length || 0;i<10;i++) html+='<div class="slot">＋</div>';
   $('#selection').innerHTML=html;
+  applyCorrectionPreviews();
   previews.refresh();
   captionCount();
 }
 function captionCount() { const post=currentPost(), length=post?.caption.length || 0, limit=post?.photos.length?1024:4096; $('#captionCount').textContent=`${length} / ${limit}`; $('#captionCount').classList.toggle('over',length>limit); $('#nextPost').disabled=!post || emptyPost(post); }
 function renderPosts() {
-  $('#postList').innerHTML=state.posts.map((p,n)=>`<article class="post-card ${p.id===state.active?'current':''}"><div class="post-card-head"><h3><span class="post-number">${String(n+1).padStart(2,'0')}</span>${esc(p.title || 'Без названия')}</h3><div class="post-actions"><button data-post-up="${p.id}" ${n===0?'disabled':''} aria-label="Переместить пост вверх">↑</button><button data-post-down="${p.id}" ${n===state.posts.length-1?'disabled':''} aria-label="Переместить пост вниз">↓</button><button data-edit="${p.id}">Открыть</button><button data-delete="${p.id}" aria-label="Удалить черновик">×</button></div></div><div class="post-strip">${p.photos.map(id=>`<button data-open="${id}"><img data-rotation="${previewRotation(id)}" decoding="async" data-preview="${photoURL(id)}" alt="${esc(byId.get(id).name)}">${videoBadge(id)}</button>`).join('')}</div>${p.photos.length?'':'<div class="empty">Пока без файлов</div>'}<p class="post-caption">${esc(p.caption || 'Без подписи')}</p></article>`).join('');
+  $('#postList').innerHTML=state.posts.map((p,n)=>`<article class="post-card ${p.id===state.active?'current':''}"><div class="post-card-head"><h3><span class="post-number">${String(n+1).padStart(2,'0')}</span>${esc(p.title || 'Без названия')}</h3><div class="post-actions"><button data-post-up="${p.id}" ${n===0?'disabled':''} aria-label="Переместить пост вверх">↑</button><button data-post-down="${p.id}" ${n===state.posts.length-1?'disabled':''} aria-label="Переместить пост вниз">↓</button><button data-edit="${p.id}">Открыть</button><button data-delete="${p.id}" aria-label="Удалить черновик">×</button></div></div><div class="post-strip">${p.photos.map(id=>`<button data-open="${id}"><img data-correction-id="${id}" data-rotation="${previewRotation(id)}" decoding="async" data-preview="${photoURL(id)}" alt="${esc(byId.get(id).name)}">${videoBadge(id)}</button>`).join('')}</div>${p.photos.length?'':'<div class="empty">Пока без файлов</div>'}<p class="post-caption">${esc(p.caption || 'Без подписи')}</p></article>`).join('');
+  applyCorrectionPreviews();
   previews.refresh();
 }
 function pick(id) {
@@ -223,7 +329,7 @@ function saveViewState() {
   try {
     sessionStorage.setItem('photo2telegram:view:'+project,JSON.stringify({
       version:1, tab, day:$('#day').value, unused:$('#unused').checked,
-      current:$('#viewer').hidden?null:current,
+      current:$('#viewer').hidden?null:current, correctionOpen,
       scrollY:Math.max(0,window.scrollY), sidebarScroll:Math.max(0,$('aside').scrollTop),
     }));
   } catch (_) { /* Browsing still works when browser storage is unavailable or full. */ }
@@ -239,6 +345,7 @@ function applyViewFilters(saved) {
   $('#unused').checked=saved.unused===true;
 }
 function restoreViewState(saved) {
+  correctionOpen=saved?.correctionOpen===true;
   if(saved) {
     if(typeof saved.current==='string'&&byId.has(saved.current))openViewer(saved.current);
     if(Number.isFinite(saved.scrollY))window.scrollTo(0,Math.max(0,saved.scrollY));
@@ -253,7 +360,7 @@ function openViewer(id) {
   viewerIds=[...new Set(ids)]; current=id;
   $('#viewer').hidden=false; renderViewer(); $('#closeViewer').focus({preventScroll:true});
 }
-function closeViewer() { finishLargeLoading(); ++largeDisplayRequest; largePreviews.close(); stopVideo(); const old=current; current=null; $('#viewer').hidden=true; previews.schedule(); const b=document.querySelector(`[data-photo="${old}"] .open-photo`); b?.focus({preventScroll:true}); saveViewState(); }
+function closeViewer() { finishLargeLoading(); ++largeDisplayRequest; largePreviews.close(); stopVideo(); const old=current; current=null; correctionOpen=false; renderCorrection(); $('#viewer').hidden=true; previews.schedule(); const b=document.querySelector(`[data-photo="${old}"] .open-photo`); b?.focus({preventScroll:true}); saveViewState(); }
 function videoTimeLabel(seconds) {
   return Number.isFinite(seconds) ? durationLabel(Math.floor(Math.max(0,seconds))) : '—:—';
 }
@@ -317,8 +424,9 @@ function renderViewer() {
   $('#missingMessage').hidden=!p.missing;
   $('#videoPanel').hidden=!isVideo;
   $('#videoAudioHint').hidden=!!p.missing;
-  $('#videoAudioHint').textContent=`${isVideo?'Поворот и звук применяются':'Поворот применяется'} при просмотре и отправке в Telegram. Оригинал сохраняется.`;
+  $('#videoAudioHint').textContent=`${isVideo?'Поворот и звук применяются':'Поворот и коррекция применяются'} при просмотре и отправке в Telegram. Оригинал сохраняется.`;
   $('#rotateControls').hidden=!!p.missing;
+  renderCorrection();
   const showPrevious=!isVideo && !p.missing && img.complete && img.naturalWidth>0;
   img.hidden=!showPrevious;
   finishLargeLoading();
@@ -346,7 +454,6 @@ function renderViewer() {
   img.alt=p.name;
   prepareLargePreviews();
   fitViewerMedia();
-  $('#makeAvatar').hidden=p.kind==='video'||p.missing;
   const muted=!!state.mutedVideos?.[current];
   $('#muteVideo').hidden=!isVideo;
   $('#muteVideo').textContent=muted?'Без звука':'Со звуком';
@@ -391,6 +498,7 @@ function bind() {
   $('#day').onchange=$('#unused').onchange=()=>{renderGallery();saveViewState();};
   $('#muteVideo').onclick=toggleVideoAudio;
   bindVideoControls();
+  bindCorrection();
   $('#rotateLeft').onclick=()=>rotateMedia(-90);
   $('#rotateRight').onclick=()=>rotateMedia(90);
   const mediaResize=new ResizeObserver(fitViewerMedia);

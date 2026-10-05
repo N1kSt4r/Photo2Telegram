@@ -8,6 +8,7 @@ function setup(posts,active){
   const context=vm.createContext({
     document:{querySelector:()=>({textContent:'',classList:{remove(){}}})},
     LargePreviewLoader:class {},
+    previews:{refresh(){},schedule(){}},
     Intl, setTimeout(){return 1;},clearTimeout(){},
     crypto:{randomUUID:()=> 'new-draft'},
   });
@@ -76,7 +77,7 @@ function videoViewer(){
   const app=setup([post('current')],'current');
   app.run(`
     globalThis.elements=new Map();
-    function element(){return {hidden:false,textContent:'',value:0,attrs:{},events:{},focus(){},style:{},clientWidth:800,clientHeight:500,
+    function element(){return {hidden:false,textContent:'',value:0,attrs:{},events:{},focus(){},style:{setProperty(k,v){this[k]=v;}},clientWidth:800,clientHeight:500,
       classList:{remove(){},toggle(){}},setAttribute(k,v){this.attrs[k]=String(v);},
       getAttribute(k){return this.attrs[k]??null;},hasAttribute(k){return k in this.attrs;},
       removeAttribute(k){delete this.attrs[k];},addEventListener(k,fn){this.events[k]=fn;}};}
@@ -260,4 +261,82 @@ test('photo rotation fits portrait turns into the viewer and resets on the next 
   assert.match(app.run("$('#largeVideo').style.transform"),/rotate\(0deg\)/);
   app.run('move(-1)');
   assert.match(app.run("$('#largePhoto').style.transform"),/rotate\(90deg\)/);
+});
+
+test('photo corrections persist across posts, keep video untouched, and reset independently',()=>{
+  const app=videoViewer();
+  app.run(`
+    document.querySelectorAll=()=>[];document.getElementById=()=>({});
+    byId.set('photo',{id:'photo',kind:'photo',name:'photo.jpg'});
+    current='photo';correctionOpen=true;
+    changeCorrection('brightness',20);changeCorrection('saturation',-100);
+  `);
+  assert.equal(app.run("JSON.stringify(photoCorrection('photo'))"),'{"brightness":20,"saturation":-100}');
+  assert.equal(app.run("$('#postPanel').hidden"),true);
+  assert.equal(app.run("$('#correctionPanel').hidden"),false);
+  assert.equal(app.run("$('#correction-brightness-value').textContent"),'+20');
+  app.run("changeCorrection('brightness',0)");
+  assert.equal(app.run("photoCorrection('photo').saturation"),-100);
+  app.run("current='clip';changeCorrection('brightness',50);renderCorrection()");
+  assert.equal(app.run("state.corrections.clip"),undefined);
+  assert.equal(app.run("$('#correctionPanel').hidden"),true);
+  app.run("current='photo';renderCorrection();blocked=true;changeCorrection(null)");
+  assert.equal(app.run("photoCorrection('photo').saturation"),-100);
+  app.run("blocked=false;changeCorrection('brightness',101)");
+  assert.equal(app.run("photoCorrection('photo').brightness"),0);
+  app.run('changeCorrection(null)');
+  assert.equal(app.run("state.corrections.photo"),undefined);
+  assert.equal(app.run("$('#correctionReset').disabled"),true);
+});
+
+test('before/after only changes the displayed filter; sRGB matrix preserves neutral and grey',()=>{
+  const app=videoViewer();
+  app.run(`
+    document.querySelectorAll=()=>[];document.getElementById=()=>({});
+    byId.set('photo',{id:'photo',kind:'photo',name:'photo.jpg'});current='photo';
+    state.corrections={photo:{brightness:20}};dirty=false;
+    showCorrectionComparison(true);
+  `);
+  assert.equal(app.run("$('#largePhoto').style['--photo-correction']"),'brightness(1)');
+  assert.equal(app.run("photoCorrection('photo').brightness"),20);
+  assert.equal(app.run('dirty'),false);
+  app.run('showCorrectionComparison(false)');
+  assert.equal(app.run("$('#largePhoto').style['--photo-correction']"),'url(#correction-20-0-0)');
+  assert.deepEqual(JSON.parse(app.run('JSON.stringify(correctionMatrix({}))')),[1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,1,0]);
+  assert.deepEqual(JSON.parse(app.run('JSON.stringify(correctionMatrix({saturation:-100}).slice(0,5))')),[.213,.715,.072,0,0]);
+});
+
+test('returning from correction refreshes thumbnail layout without refreshing on each slider move',()=>{
+  const app=videoViewer();
+  app.run(`
+    byId.set('photo',{id:'photo',kind:'photo',name:'photo.jpg'});current='photo';
+    globalThis.refreshes=0;previews.refresh=()=>refreshes++;
+    correctionOpen=true;renderCorrection();
+  `);
+  assert.equal(app.run('refreshes'),1);
+  app.run('renderCorrection()');assert.equal(app.run('refreshes'),1);
+  app.run('correctionOpen=false;renderCorrection()');assert.equal(app.run('refreshes'),2);
+  app.run('renderCorrection()');assert.equal(app.run('refreshes'),2);
+});
+
+test('reuse copies the last correction, reset preserves it, browsing and video cannot overwrite it',()=>{
+  const app=videoViewer();
+  app.run(`
+    document.querySelectorAll=()=>[];document.getElementById=()=>({});
+    for(const id of ['first','second'])byId.set(id,{id,kind:'photo',name:id+'.jpg'});
+    current='first';changeCorrection('brightness',20);changeCorrection('contrast',15);changeCorrection('saturation',-30);
+    current='second';renderCorrection();reuseLastCorrection();
+  `);
+  assert.equal(app.run("JSON.stringify(photoCorrection('second'))"),'{"brightness":20,"contrast":15,"saturation":-30}');
+  assert.equal(app.run("state.corrections.second===state.lastCorrection"),false);
+  app.run("changeCorrection('brightness',40)");
+  assert.equal(app.run("photoCorrection('first').brightness"),20);
+  assert.equal(app.run('state.lastCorrection.brightness'),40);
+  app.run('changeCorrection(null)');assert.equal(app.run('state.lastCorrection.brightness'),40);
+  app.run('reuseLastCorrection()');assert.equal(app.run("photoCorrection('second').brightness"),40);
+  app.run("current='clip';reuseLastCorrection();changeCorrection('brightness',50)");
+  assert.equal(app.run('state.corrections.clip'),undefined);
+  assert.equal(app.run('state.lastCorrection.brightness'),40);
+  app.run("current='second';blocked=true;changeCorrection(null)");
+  assert.equal(app.run("photoCorrection('second').brightness"),40);
 });

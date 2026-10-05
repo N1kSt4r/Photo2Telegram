@@ -80,7 +80,7 @@ function telegramThumbnail(file,index,post){
   const fileState=file.status||(file.prepared_ref?'ready':'unprepared');
   const stateText={unprepared:'Не подготовлен',preparing:'Готовится…',error:'Ошибка'}[fileState]||'';
   const link=file.prepared_ref?`/telegram-file/${encodeURIComponent(file.prepared_ref)}?project=${encodeURIComponent(project)}`:null;
-  return `<figure class="telegram-media ${stateText?'telegram-media-pending':''} ${fileState==='error'?'telegram-media-failed':''}" title="${esc(file.name)}${file.error?' · '+esc(file.error):''}${file.cached?' · Из кэша':''}${link?' · Открыть файл для отправки':''}">${!link&&post.status==='sent'&&post.link?`<a class="telegram-media-open" href="${esc(post.link)}" target="_blank" rel="noopener noreferrer">`:`<button class="telegram-media-open" data-output-post="${esc(post.id)}" data-output-index="${index}" aria-label="Открыть файл для отправки: ${esc(file.name)}">`}<img data-rotation="${previewRotation(file.id,file.rotation??0)}" src="${esc(photo?photoURL(file.id):'/missing.svg')}" loading="lazy" decoding="async" alt="${esc(file.name)}"><span class="telegram-media-top">${esc(format)}${file.bytes==null?'':`<span class="telegram-media-size">${formatBytes(file.bytes)}</span>`}</span>${stateText?`<span class="telegram-media-state">${esc(stateText)}${fileState==='error'&&file.error?`<small>${esc(shortTelegramError(file))}</small>`:''}</span>`:''}<span class="telegram-media-number">${index+1}</span>${duration?`<span class="telegram-media-duration">▶ ${esc(duration)}</span>`:''}${!link&&post.status==='sent'&&post.link?'</a>':'</button>'}</figure>`;
+  return `<figure class="telegram-media ${stateText?'telegram-media-pending':''} ${fileState==='error'?'telegram-media-failed':''}" title="${esc(file.name)}${file.error?' · '+esc(file.error):''}${file.cached?' · Из кэша':''}${link?' · Открыть файл для отправки':''}">${!link&&post.status==='sent'&&post.link?`<a class="telegram-media-open" href="${esc(post.link)}" target="_blank" rel="noopener noreferrer">`:`<button class="telegram-media-open" data-output-post="${esc(post.id)}" data-output-index="${index}" aria-label="Открыть файл для отправки: ${esc(file.name)}">`}<img data-correction-snapshot="${esc(JSON.stringify(file.correction||{}))}" data-rotation="${previewRotation(file.id,file.rotation??0)}" src="${esc(photo?photoURL(file.id):'/missing.svg')}" loading="lazy" decoding="async" alt="${esc(file.name)}"><span class="telegram-media-top">${esc(format)}${file.bytes==null?'':`<span class="telegram-media-size">${formatBytes(file.bytes)}</span>`}</span>${stateText?`<span class="telegram-media-state">${esc(stateText)}${fileState==='error'&&file.error?`<small>${esc(shortTelegramError(file))}</small>`:''}</span>`:''}<span class="telegram-media-number">${index+1}</span>${duration?`<span class="telegram-media-duration">▶ ${esc(duration)}</span>`:''}${!link&&post.status==='sent'&&post.link?'</a>':'</button>'}</figure>`;
 }
 function renderTelegram(data){
   if(telegramSelectionScope!==project){
@@ -144,9 +144,14 @@ function renderTelegram(data){
       const template=document.createElement('template');template.innerHTML=markup||(hideSent&&job.items.length?'<div class="empty">Все посты в списке отправлены.<br><button data-show-sent>Показать отправленные</button></div>':'<div class="empty">Пока нет постов.</div>');
       for(const img of template.content.querySelectorAll('img')){
         const previous=images.get(img.getAttribute('src'))?.shift();
-        if(previous)img.replaceWith(previous);
+        if(previous){
+          previous.dataset.rotation=img.dataset.rotation;
+          previous.dataset.correctionSnapshot=img.dataset.correctionSnapshot;
+          img.replaceWith(previous);
+        }
       }
       $('#telegramReview').replaceChildren(template.content);
+      applyCorrectionPreviews($('#telegramReview'));
     }
     $('#telegramPublish').hidden=!resumable;$('#telegramPublish').disabled=busy;
     updateTelegramSelectAll();
@@ -271,6 +276,7 @@ function renderTelegramOutput(){
   const image=$('#telegramOutputImage'),video=$('#telegramOutputVideo'),background=$('#telegramOutputBackground');
   video.pause();video.removeAttribute('src');video.load();video.hidden=true;image.hidden=true;
   background.dataset.rotation=String(previewRotation(file.id,file.rotation??0));
+  applyPhotoCorrection(background,file.correction||{});
   background.src=byId.has(file.id)?photoURL(file.id):'/missing.svg';background.hidden=false;
   $('#telegramOutputCaption').textContent=`${file.name} · ${telegramOutputIndex+1} / ${telegramOutputPost.files.length}`;
   $('#telegramOutputPrevious').disabled=telegramOutputIndex===0;

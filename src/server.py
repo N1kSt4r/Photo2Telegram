@@ -78,7 +78,17 @@ def image_date(path):
     return None
 
 
-def save_jpeg(source, target, size, *, quality=85, subsampling=-1, crop=None, rotation=0):
+def correction_matrix(correction):
+    """One sRGB affine transform, clipped once; shared with the browser preview."""
+    brightness, contrast, saturation = (1 + correction.get(k, 0) / 100
+                                       for k in ('brightness', 'contrast', 'saturation'))
+    weights = (.213, .715, .072)
+    return tuple(value for row in range(3) for value in (
+        *[(weights[col] * (1-saturation) + (saturation if row == col else 0)) * brightness * contrast
+          for col in range(3)], (1-contrast) * 127.5))
+
+
+def save_jpeg(source, target, size, *, quality=85, subsampling=-1, crop=None, rotation=0, correction=None):
     with Image.open(source) as original:
         profile = original.info.get('icc_profile')
         if size is not None and crop is None:
@@ -111,6 +121,8 @@ def save_jpeg(source, target, size, *, quality=85, subsampling=-1, crop=None, ro
                 image = image.convert('RGB')
         else:
             image = image.convert('RGB')
+        if correction and any(correction.values()):
+            image = image.convert('RGB', correction_matrix(correction))
         image.save(target, 'JPEG', quality=quality, subsampling=subsampling, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes())
 
 
@@ -246,6 +258,18 @@ class Library:
                 any(i not in self.catalog or type(angle) is not int or angle not in (0, 90, 180, 270)
                     for i, angle in rotations.items())):
             raise ValueError('Некорректный поворот файла')
+        corrections = value.get('corrections', {})
+        if (not isinstance(corrections, dict) or len(corrections) > 10000 or
+                any(i not in self.catalog or self.catalog[i].get('kind') == 'video' or
+                    not isinstance(c, dict) or set(c) - {'brightness', 'contrast', 'saturation'} or
+                    any(type(v) is not int or not -100 <= v <= 100 for v in c.values())
+                    for i, c in corrections.items())):
+            raise ValueError('Некорректная коррекция фото')
+        last_correction = value.get('lastCorrection', {})
+        if (not isinstance(last_correction, dict) or
+                set(last_correction) - {'brightness', 'contrast', 'saturation'} or
+                any(type(v) is not int or not -100 <= v <= 100 for v in last_correction.values())):
+            raise ValueError('Некорректная последняя коррекция')
         if value.get('active') is not None and value['active'] not in ids:
             raise ValueError('Неизвестный текущий пост')
 

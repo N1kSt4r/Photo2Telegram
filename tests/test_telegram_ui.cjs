@@ -17,7 +17,7 @@ function setup(){
     $:node,project:'test',byId:new Map(),token:'test-token',exportRunning:false,
     localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},
     esc:String,formatBytes:String,clearTimeout(){},setTimeout(){},
-    flush:async()=>{},
+    flush:async()=>{},applyCorrectionPreviews(){},
     document:{querySelectorAll:()=>[],createElement:()=>({
       content:{querySelectorAll:()=>[]},set innerHTML(value){this.content.markup=value;},
     })},

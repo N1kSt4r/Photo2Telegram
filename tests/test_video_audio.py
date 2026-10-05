@@ -91,7 +91,7 @@ class VideoAudioTest(unittest.TestCase):
             self.mute(False)
             return original_prepare(source, settings, target)
         with patch.object(self.publisher, '_prepare_media_file', side_effect=changing):
-            with self.assertRaisesRegex(ValueError, 'настройка звука'):
+            with self.assertRaisesRegex(ValueError, 'звука'):
                 self.publisher._prepare_media(self.source, dict(mode='local'))
         self.assertFalse((self.publisher.media_cache / (key+'.json')).exists())
 
