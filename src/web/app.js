@@ -6,6 +6,7 @@ let cacheStatsTimer = null;
 let project = '', folderPath = '', folderBrowseRequest = 0;
 let folderSuggestions = [], folderSuggestionIndex = -1, folderSuggestionRequest = 0, folderSuggestionTimer;
 let largeDisplayRequest = 0, largeLoadingTimer = null;
+let viewStateReady = false, viewSaveTimer = null;
 const decodedLargePhotos = new Map();
 function decodeLargePhoto(blob) {
   let entry=decodedLargePhotos.get(blob);
@@ -138,6 +139,7 @@ function renderContent() {
   document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   $('#gallery').hidden=tab==='posts'; $('#photoToolbar').hidden=tab==='posts'; $('#postList').hidden=tab!=='posts';
   if(tab==='posts') renderPosts(); else renderGallery();
+  saveViewState();
 }
 function renderGallery() {
   const hidden=new Set(state.hidden), selected=new Set(currentPost()?.photos || []), day=$('#day').value;
@@ -186,13 +188,50 @@ function hide(id) {
   changed();render();
   toast(i>=0?'Файл возвращён в общую ленту':'Файл скрыт. Вернуть его можно во вкладке «Скрытые».');
 }
+// Keep navigation per browser tab and library, separate from shared post drafts.
+function readViewState() {
+  try {
+    const saved=JSON.parse(sessionStorage.getItem('photo2telegram:view:'+project));
+    return saved?.version===1 ? saved : null;
+  } catch (_) {return null;}
+}
+function saveViewState() {
+  if(!viewStateReady||!project)return;
+  clearTimeout(viewSaveTimer);viewSaveTimer=null;
+  try {
+    sessionStorage.setItem('photo2telegram:view:'+project,JSON.stringify({
+      version:1, tab, day:$('#day').value, unused:$('#unused').checked,
+      current:$('#viewer').hidden?null:current,
+      scrollY:Math.max(0,window.scrollY), sidebarScroll:Math.max(0,$('aside').scrollTop),
+    }));
+  } catch (_) { /* Browsing still works when browser storage is unavailable or full. */ }
+}
+function scheduleViewSave() {
+  if(!viewStateReady)return;
+  clearTimeout(viewSaveTimer);viewSaveTimer=setTimeout(saveViewState,200);
+}
+function applyViewFilters(saved) {
+  if(!saved)return;
+  if(['photos','posts','hidden'].includes(saved.tab))tab=saved.tab;
+  $('#day').value=[...$('#day').options].some(option=>option.value===saved.day)?saved.day:'';
+  $('#unused').checked=saved.unused===true;
+}
+function restoreViewState(saved) {
+  if(saved) {
+    if(typeof saved.current==='string'&&byId.has(saved.current))openViewer(saved.current);
+    if(Number.isFinite(saved.scrollY))window.scrollTo(0,Math.max(0,saved.scrollY));
+    if(Number.isFinite(saved.sidebarScroll))$('aside').scrollTop=Math.max(0,saved.sidebarScroll);
+  }
+  viewStateReady=true;
+  saveViewState();
+}
 function openViewer(id) {
   let ids=tab==='posts'?state.posts.flatMap(p=>p.photos):visible.map(p=>p.id);
   if(!ids.includes(id)) ids=currentPost()?.photos.includes(id)?currentPost().photos:photos.map(p=>p.id);
   viewerIds=[...new Set(ids)]; current=id;
   $('#viewer').hidden=false; renderViewer(); $('#closeViewer').focus({preventScroll:true});
 }
-function closeViewer() { finishLargeLoading(); ++largeDisplayRequest; largePreviews.close(); stopVideo(); const old=current; current=null; $('#viewer').hidden=true; previews.schedule(); const b=document.querySelector(`[data-photo="${old}"] .open-photo`); b?.focus({preventScroll:true}); }
+function closeViewer() { finishLargeLoading(); ++largeDisplayRequest; largePreviews.close(); stopVideo(); const old=current; current=null; $('#viewer').hidden=true; previews.schedule(); const b=document.querySelector(`[data-photo="${old}"] .open-photo`); b?.focus({preventScroll:true}); saveViewState(); }
 function videoTimeLabel(seconds) {
   return Number.isFinite(seconds) ? durationLabel(Math.floor(Math.max(0,seconds))) : '—:—';
 }
@@ -299,6 +338,7 @@ function renderViewer() {
   $('#pickPhoto').innerHTML=`<span>${chosen?'✓ Убрать из поста':'＋ В текущий пост'}</span><kbd>Пробел</kbd>`;
   $('#pickPhoto').setAttribute('aria-pressed',chosen);
   $('#hidePhoto').innerHTML=`<span>${state.hidden.includes(current)?'Вернуть':'Скрыть'}</span><kbd>H</kbd>`;
+  saveViewState();
 }
 function move(delta) { const next=viewerIds[viewerIds.indexOf(current)+delta]; if(next){current=next;renderViewer();} }
 function reorder(from,to) {
@@ -323,7 +363,7 @@ function bind() {
   $('#postSelect').onchange=e=>{state.active=e.target.value;changed();render();};
   $('#title').oninput=e=>{currentPost().title=e.target.value;const option=$('#postSelect').selectedOptions[0];if(option)option.textContent=`${state.posts.indexOf(currentPost())+1}. ${e.target.value || 'Без названия'} · ${currentPost().photos.length} файлов`;changed();if(tab==='posts')renderPosts();};
   $('#caption').oninput=e=>{currentPost().caption=e.target.value;captionCount();changed();if(tab==='posts')renderPosts();};
-  $('#day').onchange=renderGallery;$('#unused').onchange=renderGallery;
+  $('#day').onchange=$('#unused').onchange=()=>{renderGallery();saveViewState();};
   $('#muteVideo').onclick=toggleVideoAudio;
   bindVideoControls();
   $('#closeViewer').onclick=closeViewer;$('#previous').onclick=()=>move(-1);$('#following').onclick=()=>move(1);$('#pickPhoto').onclick=()=>pick(current);$('#hidePhoto').onclick=()=>hide(current);
@@ -386,8 +426,13 @@ function bind() {
   $('#folderShortcuts').onclick=e=>{const b=e.target.closest('[data-path]');if(b)browseFolders(b.dataset.path);};
   $('#openFolder').onclick=switchFolder;
   $('#reveal').onclick=()=>api('/api/reveal',{id:exportId}).catch(e=>toast(e.message));
-  window.addEventListener('beforeunload',e=>{if(dirty||saving){e.preventDefault();e.returnValue='';}});
-  document.addEventListener('visibilitychange',()=>{if(document.hidden&&dirty)flush().catch(()=>{});});
+  // Native restoration may run before the asynchronously loaded gallery exists.
+  if('scrollRestoration' in history)history.scrollRestoration='manual';
+  window.addEventListener('scroll',scheduleViewSave,{passive:true});
+  $('aside').addEventListener('scroll',scheduleViewSave,{passive:true});
+  window.addEventListener('pagehide',saveViewState);
+  window.addEventListener('beforeunload',e=>{saveViewState();if(dirty||saving){e.preventDefault();e.returnValue='';}});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){saveViewState();if(dirty)flush().catch(()=>{});}});
 }
 function formatBytes(bytes) {
   if(bytes < 1024)return `${bytes} Б`;
@@ -603,8 +648,10 @@ async function init() {
     const data=await api('/api/library');photos=data.photos;byId=new Map(photos.map(p=>[p.id,p]));state=data.state;token=data.token;project=data.project;folderPath=data.folderPath;
     $('#folder').textContent=data.folder;$('#folder').title=folderPath;
     updateDays();
+    const savedView=readViewState();applyViewFilters(savedView);
     const cleaned=removeEmptyPosts();
     bind();if(!state.posts.length)newPost();else{if(!currentPost()){state.active=state.posts[0].id;changed();}render();if(cleaned)changed();else if(!dirty)$('#saveStatus').textContent='✓ Сохранено на диске';}
+    restoreViewState(savedView);
   } catch(e){$('main').innerHTML=`<p class="fatal">Не удалось открыть библиотеку: ${esc(e.message)}<br>Перезапустите приложение и обновите страницу.</p>`;}
 }
 init();

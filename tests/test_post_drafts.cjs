@@ -76,7 +76,7 @@ function videoViewer(){
   const app=setup([post('current')],'current');
   app.run(`
     globalThis.elements=new Map();
-    function element(){return {hidden:false,textContent:'',value:0,attrs:{},events:{},
+    function element(){return {hidden:false,textContent:'',value:0,attrs:{},events:{},focus(){},
       classList:{remove(){},toggle(){}},setAttribute(k,v){this.attrs[k]=String(v);},
       getAttribute(k){return this.attrs[k]??null;},hasAttribute(k){return k in this.attrs;},
       removeAttribute(k){delete this.attrs[k];},addEventListener(k,fn){this.events[k]=fn;}};}
@@ -158,4 +158,70 @@ test('playback keyboard controls do not add to posts or navigate the gallery; Es
   }
   app.run("globalThis.closed=false;closeViewer=()=>{closed=true;};$('#videoControls').events.keydown({key:'Escape',preventDefault(){},stopPropagation(){}})");
   assert.equal(app.run('closed'),true);
+});
+
+function viewMemory(){
+  const app=videoViewer();
+  app.run(`
+    globalThis.memory=new Map();
+    globalThis.sessionStorage={getItem:key=>memory.get(key)??null,setItem:(key,value)=>memory.set(key,value)};
+    globalThis.window={scrollY:620,scrollTo(x,y){this.scrollY=y;}};
+    $('#day').options=[{value:''},{value:'2026-10-05'}];$('#day').value='2026-10-05';
+    $('#unused').checked=true;$('aside').scrollTop=90;
+    photos=[...byId.values()];visible=photos;
+    largePreviews.close=()=>{};globalThis.previews={schedule(){}};
+  `);
+  return app;
+}
+
+test('reload restores tab, filters, gallery and sidebar scroll, and the open file, without video time',()=>{
+  const app=viewMemory();
+  app.run("tab='hidden';viewStateReady=true;saveViewState();globalThis.saved=readViewState()");
+  assert.equal(app.run('saved.current'),'clip');
+  assert.equal(app.run("Object.hasOwn(saved,'videoTime')"),false);
+  app.run(`
+    viewStateReady=false;current=null;$('#viewer').hidden=true;
+    tab='photos';$('#day').value='';$('#unused').checked=false;
+    window.scrollY=0;$('aside').scrollTop=0;
+    applyViewFilters(saved);restoreViewState(saved);
+  `);
+  assert.equal(app.run('tab'),'hidden');
+  assert.equal(app.run("$('#day').value"),'2026-10-05');
+  assert.equal(app.run("$('#unused').checked"),true);
+  assert.equal(app.run('current'),'clip');
+  assert.equal(app.run("$('#viewer').hidden"),false);
+  assert.equal(app.run('window.scrollY'),620);
+  assert.equal(app.run("$('aside').scrollTop"),90);
+  app.run('closeViewer()');
+  assert.equal(app.run('readViewState().current'),null);
+});
+
+test('view snapshots are isolated by library and initial rendering cannot overwrite saved navigation',()=>{
+  const app=viewMemory();
+  app.run("memory.set('photo2telegram:view:test',JSON.stringify({version:1,current:'clip',tab:'posts'}));saveViewState()");
+  assert.equal(app.run('readViewState().tab'),'posts');
+  app.run("project='second'");
+  assert.equal(app.run('readViewState()'),null);
+  app.run("viewStateReady=true;tab='photos';saveViewState();project='test'");
+  assert.equal(app.run('readViewState().tab'),'posts');
+});
+
+test('unavailable files, obsolete filters and broken storage do not prevent browsing',()=>{
+  const app=viewMemory();
+  app.run(`
+    current=null;$('#viewer').hidden=true;
+    globalThis.saved={version:1,current:'deleted',tab:'invalid',day:'2099-01-01',unused:'yes',scrollY:-100};
+    applyViewFilters(saved);restoreViewState(saved);
+  `);
+  assert.equal(app.run('current'),null);
+  assert.equal(app.run("$('#viewer').hidden"),true);
+  assert.equal(app.run('tab'),'photos');
+  assert.equal(app.run("$('#day').value"),'');
+  assert.equal(app.run("$('#unused').checked"),false);
+  assert.equal(app.run('window.scrollY'),0);
+  app.run("memory.set('photo2telegram:view:test','not json')");
+  assert.equal(app.run('readViewState()'),null);
+  app.run("sessionStorage.getItem=()=>{throw new Error('Blocked');};sessionStorage.setItem=()=>{throw new Error('Quota');}");
+  assert.equal(app.run('readViewState()'),null);
+  assert.doesNotThrow(()=>app.run('saveViewState()'));
 });
