@@ -193,6 +193,60 @@ function openViewer(id) {
   $('#viewer').hidden=false; renderViewer(); $('#closeViewer').focus({preventScroll:true});
 }
 function closeViewer() { finishLargeLoading(); ++largeDisplayRequest; largePreviews.close(); stopVideo(); const old=current; current=null; $('#viewer').hidden=true; previews.schedule(); const b=document.querySelector(`[data-photo="${old}"] .open-photo`); b?.focus({preventScroll:true}); }
+function videoTimeLabel(seconds) {
+  return Number.isFinite(seconds) ? durationLabel(Math.floor(Math.max(0,seconds))) : '—:—';
+}
+function updateVideoControls() {
+  const video=$('#largeVideo'), duration=video.duration;
+  const playable=video.hasAttribute('src')&&!video.error;
+  const seekable=playable&&Number.isFinite(duration)&&duration>0;
+  const playing=!video.paused&&!video.ended;
+  const button=$('#videoPlay'), seek=$('#videoSeek');
+  button.disabled=!playable;
+  button.setAttribute('aria-label',playing?'Пауза':'Воспроизвести');
+  button.title=playing?'Пауза':'Воспроизвести';
+  button.innerHTML=`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${playing?'M6 5h4v14H6zM14 5h4v14h-4z':'M8 5v14l11-7z'}"/></svg>`;
+  seek.disabled=!seekable;
+  seek.value=seekable?Math.min(1000,Math.max(0,video.currentTime/duration*1000)):0;
+  const elapsed=videoTimeLabel(video.currentTime), total=videoTimeLabel(duration);
+  seek.setAttribute('aria-valuetext',`${elapsed} из ${total}`);
+  $('#videoTime').textContent=`${elapsed} / ${total}`;
+}
+async function toggleVideoPlayback() {
+  const video=$('#largeVideo');
+  if(!video.hasAttribute('src')||video.error)return;
+  if(!video.paused&&!video.ended){video.pause();return;}
+  const source=video.getAttribute('src');
+  try { await video.play(); }
+  catch(error) {
+    if(video.getAttribute('src')===source && !$('#viewer').hidden && error.name!=='AbortError')
+      toast('Не удалось начать воспроизведение. Попробуйте открыть видео в системном плеере.');
+  }
+}
+function toggleVideoAudio() {
+  if(blocked)return toast('Обновите страницу перед продолжением');
+  if(byId.get(current)?.kind!=='video')return;
+  state.mutedVideos ||= {};
+  if(state.mutedVideos[current])delete state.mutedVideos[current];
+  else state.mutedVideos[current]=true;
+  changed();render();
+}
+function bindVideoControls() {
+  const video=$('#largeVideo');
+  for(const event of ['loadedmetadata','durationchange','timeupdate','play','pause','ended','emptied','error'])
+    video.addEventListener(event,updateVideoControls);
+  $('#videoPlay').onclick=toggleVideoPlayback;
+  $('#videoSeek').oninput=()=>{
+    if(video.error||!Number.isFinite(video.duration)||video.duration<=0)return;
+    video.currentTime=Math.min(1,Math.max(0,Number($('#videoSeek').value)/1000))*video.duration;
+    updateVideoControls();
+  };
+  // Space/arrow keys operate these controls, not the gallery behind them.
+  $('#videoControls').addEventListener('keydown',event=>{
+    if(event.key==='Escape'){event.preventDefault();closeViewer();}
+    event.stopPropagation();
+  });
+}
 function stopVideo() { const v=$('#largeVideo'); v.pause(); if(v.hasAttribute('src')) {v.removeAttribute('src');v.load();} }
 function renderViewer() {
   const p=byId.get(current); if(!p) return;
@@ -201,6 +255,7 @@ function renderViewer() {
   const video=$('#largeVideo'), isVideo=p.kind==='video'&&!p.missing;
   $('#missingMessage').hidden=!p.missing;
   $('#videoPanel').hidden=!isVideo;
+  $('#videoAudioHint').hidden=!isVideo;
   const showPrevious=!isVideo && !p.missing && img.complete && img.naturalWidth>0;
   img.hidden=!showPrevious;
   finishLargeLoading();
@@ -219,7 +274,7 @@ function renderViewer() {
     $('#largeError').hidden=true;
     const videoURL='/video/'+current+'?project='+encodeURIComponent(project);
     if(video.getAttribute('src')!==videoURL) {
-      stopVideo(); $('#videoError').hidden=true; video.hidden=false; video.poster=photoURL(current); video.src=videoURL;
+      stopVideo(); $('#videoError').hidden=true; video.hidden=false; video.poster=photoURL(current); video.src=videoURL; $('#videoControls').hidden=false;
     }
   } else {
     stopVideo();
@@ -230,9 +285,10 @@ function renderViewer() {
   $('#makeAvatar').hidden=p.kind==='video'||p.missing;
   const muted=!!state.mutedVideos?.[current];
   $('#muteVideo').hidden=!isVideo;
-  $('#muteVideo').textContent=muted?'✓ Без звука':'Отключить звук';
+  $('#muteVideo').textContent=muted?'Без звука':'Со звуком';
+  $('#muteVideo').title=muted?'Включить звук при просмотре и отправке в Telegram':'Отключить звук при просмотре и отправке в Telegram';
   $('#muteVideo').setAttribute('aria-pressed',String(muted));
-  if(isVideo) video.muted=muted;
+  if(isVideo) {video.muted=muted;updateVideoControls();}
   $('#viewerName').textContent=p.name;
   const used=usedIn(current).map(x=>x.title || 'Без названия');
   $('#viewerInfo').textContent=`${dateLabel(p.date.slice(0,10))} · ${p.date.slice(11,16)}${isVideo?' · ▶ '+durationLabel(p.duration):''}${used.length?' · В постах: '+used.join(', '):''}${p.dateSource==='file'?' · Дата изменения файла':''}${isVideo&&muted?' · Для Telegram: без звука':''}`;
@@ -268,16 +324,11 @@ function bind() {
   $('#title').oninput=e=>{currentPost().title=e.target.value;const option=$('#postSelect').selectedOptions[0];if(option)option.textContent=`${state.posts.indexOf(currentPost())+1}. ${e.target.value || 'Без названия'} · ${currentPost().photos.length} файлов`;changed();if(tab==='posts')renderPosts();};
   $('#caption').oninput=e=>{currentPost().caption=e.target.value;captionCount();changed();if(tab==='posts')renderPosts();};
   $('#day').onchange=renderGallery;$('#unused').onchange=renderGallery;
-  $('#muteVideo').onclick=()=>{
-    if(byId.get(current)?.kind!=='video')return;
-    state.mutedVideos ||= {};
-    if(state.mutedVideos[current])delete state.mutedVideos[current];
-    else state.mutedVideos[current]=true;
-    changed();render();
-  };
+  $('#muteVideo').onclick=toggleVideoAudio;
+  bindVideoControls();
   $('#closeViewer').onclick=closeViewer;$('#previous').onclick=()=>move(-1);$('#following').onclick=()=>move(1);$('#pickPhoto').onclick=()=>pick(current);$('#hidePhoto').onclick=()=>hide(current);
   $('#openVideo').onclick=()=>api('/api/open-video',{id:current}).catch(e=>toast(e.message));
-  $('#largeVideo').onerror=()=>{if(!$('#largeVideo').hasAttribute('src'))return;$('#videoError').hidden=false;$('#largeVideo').hidden=true;};
+  $('#largeVideo').onerror=()=>{if(!$('#largeVideo').hasAttribute('src'))return;$('#videoError').hidden=false;$('#largeVideo').hidden=true;$('#videoControls').hidden=true;};
   $('#largePhoto').onerror=()=>{$('#largeError').hidden=false;$('#largePhoto').hidden=true;};
   document.addEventListener('keydown',e=>{
     if(e.target.matches('input,textarea,select,video')||$('#cacheDialog').open||$('#folderDialog').open||$('#telegramDialog').open||$('#avatarDialog').open)return;
